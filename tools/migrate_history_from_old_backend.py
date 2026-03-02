@@ -65,6 +65,19 @@ def _iter_months(start: YearMonth, end: YearMonth) -> list[YearMonth]:
     return out
 
 
+def _normalize_access_token(value: str) -> str:
+    token = value.strip()
+    if token.lower().startswith("bearer "):
+        token = token.split(" ", 1)[1].strip()
+    return token
+
+
+def _looks_like_jwt(token: str) -> bool:
+    # EVE SSO v2 access tokens are JWTs (three base64url segments separated by dots).
+    # Refresh tokens are opaque and typically do NOT contain dots.
+    return token.count(".") >= 2
+
+
 def _safe_json_list(resp: httpx.Response, *, url: str) -> list[dict]:
     """Parse response JSON as list[dict].
 
@@ -203,9 +216,15 @@ async def run_migration(
     user_info = UserInfoService(esi)
 
     try:
-        token = access_token
+        token = _normalize_access_token(access_token or "") or None
         if not token:
             token = await user_info.get_ceo_access_token()
+        elif not _looks_like_jwt(token):
+            raise RuntimeError(
+                "The provided --access-token does not look like a JWT access token (expected xxx.yyy.zzz). "
+                "You likely pasted a refresh token by mistake. "
+                "Get an access token from Apps Script via Personal.getAccessToken() and pass that value."
+            )
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -288,7 +307,7 @@ def main() -> None:
             wallet=int(args.wallet),
             ref_types=ref_types,
             import_raw_jobs=bool(args.import_raw_jobs),
-            access_token=(str(args.access_token).strip() or None),
+            access_token=(str(args.access_token) or "").strip() or None,
         )
     )
 

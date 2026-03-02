@@ -327,6 +327,8 @@ Example:
 - `python tools/migrate_history_from_old_backend.py --start 2023-01 --end 2026-02`
 - If CEO token refresh fails (CCP OAuth 400), pass a currently-valid corp-member token:
 	- `python tools/migrate_history_from_old_backend.py --start 2023-01 --end 2026-02 --access-token "<ACCESS_TOKEN>"`
+		- Must be an **access token** (JWT, looks like `xxx.yyy.zzz`), not a refresh token.
+		- If you accidentally include the `Bearer ` prefix, the script will strip it.
 - Optional: also import full raw jobs history into `corpJobs`:
 	- `python tools/migrate_history_from_old_backend.py --start 2023-01 --end 2026-02 --import-raw-jobs`
 
