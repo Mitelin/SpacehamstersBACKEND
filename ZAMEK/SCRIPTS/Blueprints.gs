@@ -453,8 +453,8 @@ const Blueprints = (()=>{
     //        let quantity = range.getValue()
     //        range.setValue(job[1] * plannedJobs[plannedJob][8] + quantity);
             if (job[2] == "Copying") {
-              // for copying activity count number of copy jobs (BPC copies), not licensed runs inside the BPC
-              plannedJobs[plannedJob][11] = job[1] + Number(plannedJobs[plannedJob][11]);
+              // for copying activity count total BPC runs being produced: copies (runs) * licensedRuns
+              plannedJobs[plannedJob][11] = (Number(job[1]) * Number(job[4])) + Number(plannedJobs[plannedJob][11]);
             } else if (job[2] == "Invention") {
               // for invention activity calculate number of output items ... apply Symetry Decryptor runs + 2 ... 
               // TODO: apply probability
