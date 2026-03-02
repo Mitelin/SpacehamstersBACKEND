@@ -69,6 +69,9 @@ class UserInfoService:
         if not row:
             raise RuntimeError("CEO UserInfo není v databázi")
 
+        if not row.get("refreshToken"):
+            raise RuntimeError("CEO UserInfo nemá refreshToken v databázi")
+
         issued: datetime = row["date"]
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         diff_seconds = (now - issued).total_seconds()
@@ -94,7 +97,17 @@ class UserInfoService:
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(self._settings.eve_token_api, data=form, headers=headers)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError:
+            # CCP typically returns JSON with `error` / `error_description`.
+            # Log the response body to make server-side debugging possible.
+            log(
+                3,
+                "userInfo.getCEOAccessToken(): Token refresh failed "
+                f"status={response.status_code} body={response.text}",
+            )
+            raise
         token_json = response.json()
 
         await self.store(token_json)
