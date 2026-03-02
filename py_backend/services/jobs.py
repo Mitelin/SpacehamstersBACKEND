@@ -100,7 +100,7 @@ class JobsService:
 
     async def get_jobs_report(self, year: int, month: int) -> list[dict[str, Any]]:
         month_start = f"{int(year):04d}-{int(month):02d}-01"
-        return await db.fetch_all(
+        rows = await db.fetch_all(
             """
             SELECT
                 j.installerID AS installerId,
@@ -115,6 +115,25 @@ class JobsService:
             GROUP BY j.installerID
             """,
             [month_start, month_start],
+        )
+
+        if rows:
+            return rows
+
+        return await db.fetch_all(
+            """
+            SELECT
+                installerID AS installerId,
+                manufacturing,
+                researchTE,
+                researchME,
+                copying,
+                invention,
+                reaction
+            FROM corpJobsReportMonthly
+            WHERE year = %s AND month = %s
+            """,
+            [int(year), int(month)],
         )
 
     async def get_jobs_velocity(self, categories: Any) -> list[dict[str, Any]]:

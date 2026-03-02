@@ -657,7 +657,9 @@ async def ensure_database_ready(cfg: dict[str, Any], env: dict[str, str]) -> Non
             "corpNames",
             "corpHangars",
             "corpJobs",
+            "corpJobsReportMonthly",
             "corpWalletJournal",
+            "corpWalletJournalReportMonthly",
             "corpWalletTransactions",
             "corpUserInfo",
         ]

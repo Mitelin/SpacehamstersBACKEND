@@ -89,6 +89,31 @@ CREATE TABLE IF NOT EXISTS corpWalletJournal (
     taxReceiverID INT)
 ;
 
+-- Snapshot tables for restoring historical monthly reports when raw tables
+-- (corpJobs/corpWalletJournal) were not migrated.
+CREATE TABLE IF NOT EXISTS corpJobsReportMonthly (
+    year INT NOT NULL,
+    month INT NOT NULL,
+    installerID INT NOT NULL,
+    manufacturing INT,
+    researchTE INT,
+    researchME INT,
+    copying INT,
+    invention INT,
+    reaction INT,
+    PRIMARY KEY (year, month, installerID)
+);
+
+CREATE TABLE IF NOT EXISTS corpWalletJournalReportMonthly (
+    wallet INT NOT NULL,
+    year INT NOT NULL,
+    month INT NOT NULL,
+    refType VARCHAR(100) NOT NULL,
+    secondPartyId INT NOT NULL,
+    amount DECIMAL (15,2),
+    PRIMARY KEY (wallet, year, month, refType, secondPartyId)
+);
+
 ALTER TABLE corpWalletJournal MODIFY contextIDType VARCHAR(100);
 
 CREATE TABLE IF NOT EXISTS corpWalletTransactions (

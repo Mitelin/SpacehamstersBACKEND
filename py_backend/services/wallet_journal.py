@@ -103,17 +103,39 @@ class WalletJournalService:
         return cnt
 
     async def get_report(self, wallet: int, year: int, month: int, types: Any) -> list[dict[str, Any]]:
-        month_start = f"{int(year):04d}-{int(month):02d}-01"
-        return await db.fetch_all(
-            """
-            SELECT SUM(amount) amount, secondPartyId
-            FROM corpWalletJournal
-            WHERE date >= %s and date < DATE_ADD(%s, INTERVAL 1 MONTH)
-              AND refType in (%s)
-            GROUP BY secondPartyId
-            """,
-            [month_start, month_start, types],
-        )
+                month_start = f"{int(year):04d}-{int(month):02d}-01"
+
+                type_list = _normalize_types(types)
+                if not type_list:
+                        raise RuntimeError("types parameter missing")
+
+                in_placeholders = ",".join(["%s"] * len(type_list))
+
+                rows = await db.fetch_all(
+                        f"""
+                        SELECT SUM(amount) amount, secondPartyId
+                        FROM corpWalletJournal
+                        WHERE date >= %s and date < DATE_ADD(%s, INTERVAL 1 MONTH)
+                            AND refType IN ({in_placeholders})
+                        GROUP BY secondPartyId
+                        """,
+                        [month_start, month_start, *type_list],
+                )
+
+                if rows:
+                        return rows
+
+                # Fallback to monthly snapshot if raw table is missing historical data.
+                return await db.fetch_all(
+                        f"""
+                        SELECT SUM(amount) amount, secondPartyId
+                        FROM corpWalletJournalReportMonthly
+                        WHERE wallet = %s AND year = %s AND month = %s
+                            AND refType IN ({in_placeholders})
+                        GROUP BY secondPartyId
+                        """,
+                        [int(wallet), int(year), int(month), *type_list],
+                )
 
     async def get_pl(self, year: int, month: int) -> list[dict[str, Any]]:
         m = int(month)
@@ -187,3 +209,11 @@ def _esi_dt(value: str | None) -> str | None:
     if not value:
         return None
     return value[:19].replace("T", " ")
+
+
+def _normalize_types(types: Any) -> list[str]:
+    if types is None:
+        return []
+    if isinstance(types, (list, tuple)):
+        return [str(t) for t in types if t is not None and str(t) != ""]
+    return [str(types)]

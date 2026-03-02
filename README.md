@@ -294,10 +294,39 @@ This is a partial overview to orient you. Exact routes are defined in `py_backen
 - `GET /api/corporation/{corporation_id}/wallets/{wallet}/pl/{year}/{month}`
 - `GET /api/corporation/{corporation_id}/wallets/{wallet}/volumes`
 
+## Continuous data collection (new data)
+
+Two options:
+
+- Recommended: enable backend scheduler by setting `ENABLE_SCHEDULER=1` in `launcher_config.json`.
+	- Backend runs daily sync jobs (industry jobs + wallet journal) using the stored CEO token.
+	- See scheduler wiring in `py_backend/main.py`.
+- Manual/on-demand: call the sync endpoints from Google Apps Script (see `ZAMEK/SCRIPTS/AubiApi.gs`).
+
+Note: scheduler/ESI sync requires that the CEO OAuth token exists in DB (via `POST /api/userInfo`).
+
 ### Blueprints
 
 - `POST /api/blueprints/calculate` — compute jobs + materials for requested output types
 - `POST /api/blueprints/{type_id}/calculate` — compute for a single product type
+
+## History migration (from old backend)
+
+If you did not migrate the old MariaDB, historical monthly reports (jobs history and bounty/ratting) can be restored from the old running backend into snapshot tables.
+
+- Script: [tools/migrate_history_from_old_backend.py](tools/migrate_history_from_old_backend.py)
+- Destination tables (created via `dbinit.sql`): `corpJobsReportMonthly`, `corpWalletJournalReportMonthly`
+
+Prerequisites:
+
+- New backend DB must contain CEO refresh token (`corpUserInfo` for `CEO_CHARACTER_ID`) so the script can obtain a valid access token.
+- Old backend must be reachable and accept the same corporation membership.
+
+Example:
+
+- `python tools/migrate_history_from_old_backend.py --start 2023-01 --end 2026-02`
+- Optional: also import full raw jobs history into `corpJobs`:
+	- `python tools/migrate_history_from_old_backend.py --start 2023-01 --end 2026-02 --import-raw-jobs`
 
 ## Logging
 
