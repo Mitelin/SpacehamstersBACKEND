@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 
-from py_backend import db
-from py_backend.esi import ESIClient
-from py_backend.services.user_info import UserInfoService
-from py_backend.settings import get_settings
+# Allow running as a plain script: `python tools/migrate_history_from_old_backend.py ...`
+# In that case, sys.path[0] points at `tools/`, so we add the repo root.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from py_backend import db  # noqa: E402
+from py_backend.esi import ESIClient  # noqa: E402
+from py_backend.services.user_info import UserInfoService  # noqa: E402
+from py_backend.settings import get_settings  # noqa: E402
 
 
 @dataclass(frozen=True)
