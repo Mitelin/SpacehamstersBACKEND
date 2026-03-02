@@ -163,6 +163,7 @@ async def run_migration(
     wallet: int,
     ref_types: list[str],
     import_raw_jobs: bool,
+    access_token: str | None,
 ) -> None:
     settings = get_settings()
     await db.init_pool()
@@ -171,7 +172,9 @@ async def run_migration(
     user_info = UserInfoService(esi)
 
     try:
-        token = await user_info.get_ceo_access_token()
+        token = access_token
+        if not token:
+            token = await user_info.get_ceo_access_token()
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -235,6 +238,14 @@ def main() -> None:
         action="store_true",
         help="Also import full raw corp jobs history from old backend into corpJobs",
     )
+    parser.add_argument(
+        "--access-token",
+        default="",
+        help=(
+            "Optional: use this Bearer access token instead of refreshing CEO token from DB. "
+            "Any valid corp-member token should work for calling the old backend."
+        ),
+    )
 
     args = parser.parse_args()
     ref_types = [t.strip() for t in str(args.ref_types).split(",") if t.strip()]
@@ -246,6 +257,7 @@ def main() -> None:
             wallet=int(args.wallet),
             ref_types=ref_types,
             import_raw_jobs=bool(args.import_raw_jobs),
+            access_token=(str(args.access_token).strip() or None),
         )
     )
 
