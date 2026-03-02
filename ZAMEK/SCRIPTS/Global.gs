@@ -1,7 +1,7 @@
 /* Constants */
 const corporationId = 98652228   // Corporation ID for "Space Hamsters CZ SK" found via /universe/ids API
 const eveApi = 'https://esi.evetech.net/latest'
-const aubiApi = 'https://aubi.synology.me:4444/api'
+const aubiApi = 'http://www.spacehamsters.eu:8010/api'
 
 
 // var ui = SpreadsheetApp.getUi();

@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from datetime import datetime
 from typing import Any
 
 from .. import db
 from ..esi import ESIClient, parse_x_pages
 from ..logger import log
+
+
+def _jsonable_value(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    return value
+
+
+def _jsonable_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{k: _jsonable_value(v) for k, v in row.items()} for row in rows]
 
 
 class WalletJournalService:
@@ -103,39 +116,40 @@ class WalletJournalService:
         return cnt
 
     async def get_report(self, wallet: int, year: int, month: int, types: Any) -> list[dict[str, Any]]:
-                month_start = f"{int(year):04d}-{int(month):02d}-01"
+        month_start = f"{int(year):04d}-{int(month):02d}-01"
 
-                type_list = _normalize_types(types)
-                if not type_list:
-                        raise RuntimeError("types parameter missing")
+        type_list = _normalize_types(types)
+        if not type_list:
+            raise RuntimeError("types parameter missing")
 
-                in_placeholders = ",".join(["%s"] * len(type_list))
+        in_placeholders = ",".join(["%s"] * len(type_list))
 
-                rows = await db.fetch_all(
-                        f"""
-                        SELECT SUM(amount) amount, secondPartyId
-                        FROM corpWalletJournal
-                        WHERE date >= %s and date < DATE_ADD(%s, INTERVAL 1 MONTH)
-                            AND refType IN ({in_placeholders})
-                        GROUP BY secondPartyId
-                        """,
-                        [month_start, month_start, *type_list],
-                )
+        rows = await db.fetch_all(
+            f"""
+            SELECT SUM(amount) amount, secondPartyId
+            FROM corpWalletJournal
+            WHERE date >= %s and date < DATE_ADD(%s, INTERVAL 1 MONTH)
+                AND refType IN ({in_placeholders})
+            GROUP BY secondPartyId
+            """,
+            [month_start, month_start, *type_list],
+        )
 
-                if rows:
-                        return rows
+        if rows:
+            return _jsonable_rows(rows)
 
-                # Fallback to monthly snapshot if raw table is missing historical data.
-                return await db.fetch_all(
-                        f"""
-                        SELECT SUM(amount) amount, secondPartyId
-                        FROM corpWalletJournalReportMonthly
-                        WHERE wallet = %s AND year = %s AND month = %s
-                            AND refType IN ({in_placeholders})
-                        GROUP BY secondPartyId
-                        """,
-                        [int(wallet), int(year), int(month), *type_list],
-                )
+        # Fallback to monthly snapshot if raw table is missing historical data.
+        rows = await db.fetch_all(
+            f"""
+            SELECT SUM(amount) amount, secondPartyId
+            FROM corpWalletJournalReportMonthly
+            WHERE wallet = %s AND year = %s AND month = %s
+                AND refType IN ({in_placeholders})
+            GROUP BY secondPartyId
+            """,
+            [int(wallet), int(year), int(month), *type_list],
+        )
+        return _jsonable_rows(rows)
 
     async def get_pl(self, year: int, month: int) -> list[dict[str, Any]]:
         m = int(month)
@@ -151,7 +165,7 @@ class WalletJournalService:
         else:
             date_to = datetime(y, m + 1, 1)
 
-        return await db.fetch_all(
+        rows = await db.fetch_all(
             """
             SELECT
                   wj.id
@@ -203,6 +217,8 @@ class WalletJournalService:
             """,
             [date_from, date_to],
         )
+
+        return _jsonable_rows(rows)
 
 
 def _esi_dt(value: str | None) -> str | None:

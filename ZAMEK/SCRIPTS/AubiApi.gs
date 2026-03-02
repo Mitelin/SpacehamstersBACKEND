@@ -2,7 +2,7 @@
  * Aubi Rest Api client
  */ 
 const Aubi = (()=>{
-  const aubiApi = 'https://aubi.synology.me:4444/api'
+  const aubiApi = 'http://www.spacehamsters.eu:8010/api'
   const options_get = {
     'method' : 'get',
     "headers" : {    
@@ -292,7 +292,7 @@ function testAubiGetIndustryVelocity() {
  * Aubi Rest Api client
  */ 
 const Aubi = (()=>{
-  const aubiApi = 'https://aubi.synology.me:4444/api'
+  const aubiApi = 'http://www.spacehamsters.eu:8010/api'
   const options_get = {
     'method' : 'get',
     "headers" : {    
