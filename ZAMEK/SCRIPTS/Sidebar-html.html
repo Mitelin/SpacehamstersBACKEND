@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+</head>
+
+<body>
+  <p id="heading"></p>
+  <ul id="list"></ul>
+<script>
+  
+  var SHEET_VALUES = {}
+
+  function drawStatus() {
+    // fetch current status
+    google.script.run.withSuccessHandler(onSuccess).getSidebarData();
+
+    // update header
+    if (SHEET_VALUES.heading) {
+      document.getElementById("heading").innerHTML = SHEET_VALUES.heading;
+    }
+
+    // update the list of events
+    if (SHEET_VALUES.items) {
+      list = document.getElementById("list");
+      list.innerHTML='';
+      
+      SHEET_VALUES.items.forEach(i => {
+//        list.innerHTML += '<li>' + i + '</li>';
+        document.getElementById("heading").innerHTML += '<br>' + i;
+      });
+    }
+
+    // end interval
+    if (SHEET_VALUES.close == '1') {
+       clearInterval(interval);
+    }
+  }
+
+  function onSuccess(status){
+    SHEET_VALUES = status
+  }
+
+  var interval = setInterval(drawStatus, 1000)
+  drawStatus(); // initial status
+
+</script>
+</body>
+</html>

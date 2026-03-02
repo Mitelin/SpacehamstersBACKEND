@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+  </head>
+  <body>
+    <b>Stav přihlášení do EVE</b>
+    <? var data = getLoginStatus(); ?>
+    <br>
+    Platnost přihlášení <?= data.expiration ?> s
+    <br>
+    <br>
+    <a href="<?= data.loginUrl ?>" target="_blank"><img src="https://web.ccpgamescdn.com/eveonlineassets/developers/eve-sso-login-black-large.png"></a>
+    <br>
+    (otevře nové okno)
+    <br>
+    <br>
+    <input type="button" value="Zavřít" onclick="google.script.host.close()" />
+  </body>
+</html>

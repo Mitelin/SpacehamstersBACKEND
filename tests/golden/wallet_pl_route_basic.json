@@ -1,0 +1,11 @@
+[
+  {
+    "amount": 42.0,
+    "cd": "C",
+    "id": 1,
+    "quantity": 10,
+    "refType": "market_transaction",
+    "typeId": 34,
+    "typeName": "Tritanium"
+  }
+]

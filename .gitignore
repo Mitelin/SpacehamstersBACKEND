@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtualenv
+.venv/
+venv/
+ENV/
+
+# Test/cache
+.pytest_cache/
+
+# Local runtime/state
+logs/
+.backend.pid
+.launcher_state.json
+.launcher.lock
+.launcher_preserve/
+
+# Configs
+# Never commit filled local config (likely contains passwords/tokens).
+launcher_config.json
+
+# Track templates/examples.
+!launcher_config.example.json
+!launcher_config.linux.example.json
+
+# Local env (keep .env.example tracked)
+.env
+.env.*
+!.env.example
+
+# Project-specific: ignore JS prototype folder, but keep Google Apps Script sources.
+ZAMEK/*
+!ZAMEK/SCRIPTS/
+!ZAMEK/SCRIPTS/**
+
+# Project-specific: ignore CCP SDE JSONL (large local data)
+py_backend/SDE CCP/
+
+# Project-specific: ignore local context notes
+CONTEXTPREPIS.MD
+uzivatele.md
+
+# Project-specific: ignore launcher notes
+LAUNCHER.md
+
+# Local debug artifacts
+git_path_debug.txt
+git_remote.txt
+git_status.txt
+terminal_debug.txt
+git_fetch.txt
+git_branch.txt
+git_ls_remote.txt

@@ -1,0 +1,10 @@
+[
+  {
+    "buyPrice": 4.2,
+    "buyQuantity": 10,
+    "sellPrice": 4.8,
+    "sellQuantity": 5,
+    "typeID": 34,
+    "typeName": "Tritanium"
+  }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "activity": "Manufacturing",
+    "activityID": 1,
+    "blueprintType": "Blueprint",
+    "blueprintTypeID": 100,
+    "duration": 3600,
+    "installerID": 42,
+    "locationId": 999,
+    "outputLocationID": 555,
+    "productType": "Product",
+    "productTypeID": 200,
+    "quantity": 10.0,
+    "runs": 2
+  }
+]
