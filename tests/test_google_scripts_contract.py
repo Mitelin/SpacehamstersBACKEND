@@ -304,9 +304,19 @@ def _extract_backend_path_sample(url_expr: str, *, base_var: str = "aubiApi") ->
             built.append("1")
 
         combined = "".join(built)
+
+        # Typical pattern in these scripts is: aubiApi (which ends with /api) + '/endpoint/...'
+        # After stripping the base var, `combined` is often just '/endpoint/...'.
         api_idx = combined.find("/api/")
         if api_idx >= 0:
             combined = combined[api_idx:]
+        else:
+            # If we got a leading path segment, assume it's under the /api prefix.
+            if combined.startswith("/"):
+                combined = "/api" + combined
+            elif combined.startswith("api/"):
+                combined = "/" + combined
+
         if not combined.startswith("/api/") and combined.startswith("/api"):
             combined = combined.replace("/api//", "/api/")
         if not combined.startswith("/api/"):
@@ -368,7 +378,7 @@ def _extract_object_literal_after(text: str, idx: int) -> str | None:
     return text[brace : end + 1]
 
 
-def _resolve_options_evidence(script_text: str, options_expr: str | None) -> str:
+def _resolve_options_evidence(script_text: str, options_expr: str | None, *, call_line_1based: int | None = None) -> str:
     """Return a combined text blob that should include auth/contentType hints for options_expr.
 
     This is intentionally heuristic (no full JS parser).
@@ -405,6 +415,36 @@ def _resolve_options_evidence(script_text: str, options_expr: str | None) -> str
     ident = _extract_identifier(expr)
     if not ident:
         return "\n".join(out)
+
+    # Prefer resolving evidence near the callsite (same function/block) to avoid
+    # picking up unrelated `options` variables in other parts of the file.
+    scope_text = script_text
+    if call_line_1based is not None:
+        scope_text = _get_line_window(script_text, line_1based=call_line_1based, before=240, after=0)
+
+    # If `ident` is assigned from another identifier or helper function (common pattern:
+    #   var options = authorized_options_post();
+    #   var options = options_post;
+    # ) then include evidence for the RHS as well.
+    assign_rhs: str | None = None
+    assign_iter = list(
+        re.finditer(
+            rf"(?:var|let|const)\s+{re.escape(ident)}\s*=\s*(?P<rhs>[^;\n]+)",
+            scope_text,
+        )
+    )
+    if assign_iter:
+        assign_rhs = assign_iter[-1].group("rhs").strip()
+        out.append(assign_rhs)
+        # Follow one level of indirection.
+        out.append(_resolve_options_evidence(script_text, assign_rhs, call_line_1based=call_line_1based))
+
+    # If helper functions reference base option objects (e.g. authorized_options_post() uses options_post),
+    # include evidence for those as well so contentType is discoverable.
+    joined = "\n".join(out)
+    for base_ident in ("options_post", "options_get"):
+        if ident != base_ident and re.search(rf"\b{base_ident}\b", joined):
+            out.append(_resolve_options_evidence(script_text, base_ident, call_line_1based=call_line_1based))
 
     # Try to find its assignment.
     # e.g. const options_post = { ... }
@@ -487,10 +527,11 @@ def _extract_payload_expr(script_text: str, call: ScriptCall) -> str | None:
         return None
 
     # Search nearby for: <ident>.payload = ...
-    win = _get_line_window(script_text, line_1based=call.line, before=80, after=5)
-    m = re.search(rf"\b{re.escape(ident)}\s*\.\s*payload\s*=\s*(?P<rhs>[^;\n]+)", win)
-    if m:
-        return m.group("rhs").strip()
+    # Prefer the closest assignment before the call (there can be multiple `options.payload = ...` in the file).
+    win = _get_line_window(script_text, line_1based=call.line, before=120, after=5)
+    matches = list(re.finditer(rf"\b{re.escape(ident)}\s*\.\s*payload\s*=\s*(?P<rhs>[^;\n]+)", win))
+    if matches:
+        return matches[-1].group("rhs").strip()
 
     # Or: var <ident> = { ... payload: ... }
     win2 = _get_line_window(script_text, line_1based=call.line, before=120, after=0)
@@ -529,8 +570,9 @@ def _extract_req_keys_from_window(window_text: str, req_ident: str) -> set[str]:
     keys: set[str] = set()
 
     # var req = { a: 1, "b": 2 }
-    init = re.search(rf"(?:var|let|const)\s+{re.escape(req_ident)}\s*=\s*\{{", window_text)
-    if init:
+    inits = list(re.finditer(rf"(?:var|let|const)\s+{re.escape(req_ident)}\s*=\s*\{{", window_text))
+    if inits:
+        init = inits[-1]  # nearest definition in the window
         obj = _extract_object_literal_after(window_text, init.end() - 1)
         if obj:
             keys |= _extract_object_literal_keys(obj)
@@ -741,7 +783,7 @@ def test_google_scripts_corporation_calls_have_bearer_auth() -> None:
             continue
 
         txt = _read_text(call.file)
-        evidence = _resolve_options_evidence(txt, call.raw_options_expr)
+        evidence = _resolve_options_evidence(txt, call.raw_options_expr, call_line_1based=call.line)
         if not _looks_like_bearer_auth(evidence):
             failures.append(
                 f"{call.file.relative_to(REPO_ROOT)}:{call.line}: missing Bearer auth for {call.path_sample} opts={call.raw_options_expr!r}"
@@ -765,7 +807,7 @@ def test_google_scripts_post_calls_send_json_payload() -> None:
             continue
 
         txt = _read_text(call.file)
-        evidence = _resolve_options_evidence(txt, call.raw_options_expr)
+        evidence = _resolve_options_evidence(txt, call.raw_options_expr, call_line_1based=call.line)
 
         has_json = _looks_like_json_content_type(evidence)
         has_payload = ("payload" in evidence.lower()) or _call_has_payload_nearby(call.file, call.line, call.raw_options_expr)

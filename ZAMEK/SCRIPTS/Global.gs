@@ -1,7 +1,11 @@
 /* Constants */
 const corporationId = 98652228   // Corporation ID for "Space Hamsters CZ SK" found via /universe/ids API
 const eveApi = 'https://esi.evetech.net/latest'
-const aubiApi = 'https://aubi.synology.me:4444/api'
+// Base URL of the Python backend used by these scripts.
+// Configure it in Apps Script: Project Settings -> Script properties -> AUBI_API_BASE_URL
+// Example: https://mujserver:8010/api
+const aubiApi = PropertiesService.getScriptProperties().getProperty('AUBI_API_BASE_URL')
+	|| 'https://aubi.synology.me:4444/api'
 
 
 // var ui = SpreadsheetApp.getUi();
