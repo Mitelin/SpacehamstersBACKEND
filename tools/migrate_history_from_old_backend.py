@@ -14,6 +14,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+# Load repo-local .env if present (mirrors launcher behavior).
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    dotenv_path = REPO_ROOT / ".env"
+    if dotenv_path.exists():
+        load_dotenv(dotenv_path=dotenv_path, override=False)
+except Exception:
+    pass
+
 from py_backend import db  # noqa: E402
 from py_backend.esi import ESIClient  # noqa: E402
 from py_backend.services.user_info import UserInfoService  # noqa: E402
