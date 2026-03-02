@@ -127,7 +127,7 @@ class AssetsService:
                             """
                             INSERT INTO corpAssetsTemp (
                                 itemID, typeID, locationType, locationId, locationFlag, quantity, isSingleton, isBlueprintCopy
-                            ) VALUES (?,?,?,?,?,?,?,?)
+                            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                             """,
                             [
                                 item.get("item_id"),
@@ -152,7 +152,7 @@ class AssetsService:
             async with conn.cursor() as cur:
                 for item in list(items):
                     await cur.execute(
-                        "REPLACE INTO corpAssetsNames (itemID, name) VALUES (?,?)",
+                        "REPLACE INTO corpAssetsNames (itemID, name) VALUES (%s,%s)",
                         [item.get("item_id"), item.get("name")],
                     )
 

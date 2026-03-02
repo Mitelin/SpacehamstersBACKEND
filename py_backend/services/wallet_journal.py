@@ -69,7 +69,7 @@ class WalletJournalService:
                             id, amount, balance, contextID, contextIDType, date,
                             description, firstPartyID, reason, refType,
                             secondPartyId, tax, taxReceiverID
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         """,
                         [
                             item.get("id"),
@@ -96,7 +96,7 @@ class WalletJournalService:
             async with conn.cursor() as cur:
                 for item in list(items):
                     await cur.execute(
-                        "REPLACE INTO corpNames (ID, name, category) VALUES (?,?,?)",
+                        "REPLACE INTO corpNames (ID, name, category) VALUES (%s,%s,%s)",
                         [item.get("id"), item.get("name"), item.get("category")],
                     )
                     cnt += 1

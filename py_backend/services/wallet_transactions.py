@@ -44,7 +44,7 @@ class WalletTransactionsService:
                         REPLACE INTO corpWalletTransactions (
                             transactionID, clientID, date, isBuy, journalRefID,
                             locationID, quantity, typeID, unitPrice
-                        ) VALUES (?,?,?,?,?,?,?,?,?)
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         """,
                         [
                             item.get("transaction_id"),

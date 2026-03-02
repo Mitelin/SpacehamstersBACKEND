@@ -49,7 +49,7 @@ class JobsService:
                                 completedCharacterID, completedDate, cost, duration, endDate, facilityID,
                                 installerID, licensedRuns, outputLocationID, pauseDate, probability,
                                 productTypeID, runs, startDate, stationID, status, successfulRuns
-                            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                             """,
                             [
                                 job.get("job_id"),

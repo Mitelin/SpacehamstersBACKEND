@@ -42,7 +42,7 @@ class UserInfoService:
         log(2, "userInfo.store()")
         user = parse_jwt(user_info["access_token"])
         await db.execute(
-            "REPLACE INTO corpUserInfo (userID, date, accessToken, refreshToken, expiresIn) VALUES (?,?,?,?,?)",
+            "REPLACE INTO corpUserInfo (userID, date, accessToken, refreshToken, expiresIn) VALUES (%s,%s,%s,%s,%s)",
             [
                 user.user_id,
                 datetime.now(timezone.utc).replace(tzinfo=None),
@@ -63,7 +63,7 @@ class UserInfoService:
 
     async def get_ceo_access_token(self) -> str:
         row = await db.fetch_one(
-            "SELECT date, accessToken, refreshToken, expiresIn FROM corpUserInfo WHERE userID = ?",
+            "SELECT date, accessToken, refreshToken, expiresIn FROM corpUserInfo WHERE userID = %s",
             [self._settings.ceo_character_id],
         )
         if not row:
