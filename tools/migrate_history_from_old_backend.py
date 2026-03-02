@@ -5,6 +5,7 @@ import asyncio
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+import json
 
 import httpx
 
@@ -62,6 +63,36 @@ def _iter_months(start: YearMonth, end: YearMonth) -> list[YearMonth]:
             month = 1
             year += 1
     return out
+
+
+def _safe_json_list(resp: httpx.Response, *, url: str) -> list[dict]:
+    """Parse response JSON as list[dict].
+
+    Old backend may (for some months) return an empty body (200/204) or even a
+    non-JSON error page. For empty bodies we treat it as an empty list.
+    For non-JSON bodies we raise with diagnostics.
+    """
+    text = resp.text
+    if not text or not text.strip():
+        return []
+    try:
+        data = resp.json()
+    except json.JSONDecodeError as exc:
+        sample = text[:300].replace("\n", "\\n")
+        content_type = resp.headers.get("content-type", "")
+        raise RuntimeError(
+            "Old backend returned non-JSON response. "
+            f"url={url} status={resp.status_code} content-type={content_type} sample={sample}"
+        ) from exc
+
+    if data is None:
+        return []
+    if isinstance(data, list):
+        return data
+    raise RuntimeError(
+        "Old backend returned unexpected JSON type. "
+        f"url={url} status={resp.status_code} type={type(data).__name__}"
+    )
 
 
 async def _upsert_jobs_month(year: int, month: int, report_rows: list[dict]) -> None:
@@ -192,7 +223,7 @@ async def run_migration(
                 jobs_url = f"{old_api_base}/corporation/{settings.corporation_id}/jobs/report/{ym.year}/{ym.month}"
                 resp = await client.get(jobs_url, headers=headers)
                 resp.raise_for_status()
-                jobs_report = resp.json() or []
+                jobs_report = _safe_json_list(resp, url=jobs_url)
                 await _upsert_jobs_month(ym.year, ym.month, jobs_report)
 
                 for ref_type in ref_types:
@@ -205,7 +236,7 @@ async def run_migration(
                         json={"year": ym.year, "month": ym.month, "types": [ref_type]},
                     )
                     resp.raise_for_status()
-                    wallet_report = resp.json() or []
+                    wallet_report = _safe_json_list(resp, url=wallet_url)
                     await _upsert_wallet_month(wallet, ym.year, ym.month, ref_type, wallet_report)
 
     finally:
