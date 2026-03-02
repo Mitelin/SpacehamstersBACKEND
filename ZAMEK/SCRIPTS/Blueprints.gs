@@ -292,7 +292,7 @@ const Blueprints = (()=>{
         'contentType': 'application/json',
         'payload' : JSON.stringify(req)
       };
-      var response = UrlFetchApp.fetch("https://aubi.synology.me:4444/api/blueprints/calculate", options);
+      var response = UrlFetchApp.fetch("http://www.spacehamsters.eu:8010/api/blueprints/calculate", options);
 
       // parsuj odpoved do pole struktur
       var json = response.getContentText();
@@ -453,8 +453,8 @@ const Blueprints = (()=>{
     //        let quantity = range.getValue()
     //        range.setValue(job[1] * plannedJobs[plannedJob][8] + quantity);
             if (job[2] == "Copying") {
-              // for copying activity calculate output BPC number of runs
-              plannedJobs[plannedJob][11] = job[4] * job[1] * plannedJobs[plannedJob][8] + Number(plannedJobs[plannedJob][11]);
+              // for copying activity count number of copy jobs (BPC copies), not licensed runs inside the BPC
+              plannedJobs[plannedJob][11] = job[1] + Number(plannedJobs[plannedJob][11]);
             } else if (job[2] == "Invention") {
               // for invention activity calculate number of output items ... apply Symetry Decryptor runs + 2 ... 
               // TODO: apply probability
@@ -1775,7 +1775,7 @@ const Blueprints = (()=>{
         'contentType': 'application/json',
         'payload' : JSON.stringify(req)
       };
-      var response = UrlFetchApp.fetch("https://aubi.synology.me:4444/api/blueprints/calculate", options);
+      var response = UrlFetchApp.fetch("http://www.spacehamsters.eu:8010/api/blueprints/calculate", options);
 
       // parsuj odpoved do pole struktur
       var json = response.getContentText();
