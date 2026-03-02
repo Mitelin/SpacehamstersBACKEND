@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 import json
+from collections import defaultdict
 
 import httpx
 
@@ -106,6 +107,76 @@ def _safe_json_list(resp: httpx.Response, *, url: str) -> list[dict]:
         "Old backend returned unexpected JSON type. "
         f"url={url} status={resp.status_code} type={type(data).__name__}"
     )
+
+
+def _aggregate_wallet_from_pl(pl_rows: list[dict], ref_types: list[str]) -> dict[str, list[dict]]:
+    ref_set = set(ref_types)
+    sums: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
+
+    for row in pl_rows:
+        ref_type = row.get("refType")
+        if not ref_type or ref_type not in ref_set:
+            continue
+
+        party_id = row.get("partyId")
+        if party_id is None:
+            continue
+
+        amount = row.get("amount")
+        if amount is None:
+            continue
+
+        try:
+            pid = int(party_id)
+            amt = float(amount)
+        except Exception:
+            continue
+
+        sums[ref_type][pid] += amt
+
+    out: dict[str, list[dict]] = {}
+    for ref_type in ref_types:
+        by_party = sums.get(ref_type, {})
+        out[ref_type] = [{"secondPartyId": pid, "amount": amt} for pid, amt in by_party.items()]
+    return out
+
+
+async def _fetch_wallet_reports_for_month(
+    *,
+    client: httpx.AsyncClient,
+    old_api_base: str,
+    corporation_id: int,
+    wallet: int,
+    year: int,
+    month: int,
+    ref_types: list[str],
+    headers: dict[str, str],
+) -> dict[str, list[dict]]:
+    """Return per-refType aggregates for a given month.
+
+    Primary: POST /wallets/{wallet}/journal/report with a single refType.
+    Fallback: GET /wallets/{wallet}/pl/{year}/{month} and aggregate client-side.
+    """
+    wallet_url = f"{old_api_base}/corporation/{corporation_id}/wallets/{wallet}/journal/report"
+
+    per_type: dict[str, list[dict]] = {}
+    for ref_type in ref_types:
+        try:
+            resp = await client.post(
+                wallet_url,
+                headers={**headers, "Content-Type": "application/json"},
+                json={"year": year, "month": month, "types": [ref_type]},
+            )
+            resp.raise_for_status()
+            per_type[ref_type] = _safe_json_list(resp, url=wallet_url)
+        except Exception:
+            pl_url = f"{old_api_base}/corporation/{corporation_id}/wallets/{wallet}/pl/{year}/{month}"
+            pl_resp = await client.get(pl_url, headers=headers)
+            pl_resp.raise_for_status()
+            pl_rows = _safe_json_list(pl_resp, url=pl_url)
+            return _aggregate_wallet_from_pl(pl_rows, ref_types)
+
+    return per_type
 
 
 async def _upsert_jobs_month(year: int, month: int, report_rows: list[dict]) -> None:
@@ -245,17 +316,17 @@ async def run_migration(
                 jobs_report = _safe_json_list(resp, url=jobs_url)
                 await _upsert_jobs_month(ym.year, ym.month, jobs_report)
 
-                for ref_type in ref_types:
-                    wallet_url = (
-                        f"{old_api_base}/corporation/{settings.corporation_id}/wallets/{wallet}/journal/report"
-                    )
-                    resp = await client.post(
-                        wallet_url,
-                        headers={**headers, "Content-Type": "application/json"},
-                        json={"year": ym.year, "month": ym.month, "types": [ref_type]},
-                    )
-                    resp.raise_for_status()
-                    wallet_report = _safe_json_list(resp, url=wallet_url)
+                wallet_reports = await _fetch_wallet_reports_for_month(
+                    client=client,
+                    old_api_base=old_api_base,
+                    corporation_id=settings.corporation_id,
+                    wallet=wallet,
+                    year=ym.year,
+                    month=ym.month,
+                    ref_types=ref_types,
+                    headers=headers,
+                )
+                for ref_type, wallet_report in wallet_reports.items():
                     await _upsert_wallet_month(wallet, ym.year, ym.month, ref_type, wallet_report)
 
     finally:
