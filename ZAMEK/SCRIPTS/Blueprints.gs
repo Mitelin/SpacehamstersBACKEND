@@ -292,7 +292,7 @@ const Blueprints = (()=>{
         'contentType': 'application/json',
         'payload' : JSON.stringify(req)
       };
-      var response = UrlFetchApp.fetch(aubiApi + "/blueprints/calculate", options);
+      var response = UrlFetchApp.fetch("https://aubi.synology.me:4444/api/blueprints/calculate", options);
 
       // parsuj odpoved do pole struktur
       var json = response.getContentText();
@@ -1775,7 +1775,7 @@ const Blueprints = (()=>{
         'contentType': 'application/json',
         'payload' : JSON.stringify(req)
       };
-      var response = UrlFetchApp.fetch(aubiApi + "/blueprints/calculate", options);
+      var response = UrlFetchApp.fetch("https://aubi.synology.me:4444/api/blueprints/calculate", options);
 
       // parsuj odpoved do pole struktur
       var json = response.getContentText();

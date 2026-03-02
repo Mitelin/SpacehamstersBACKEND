@@ -2,8 +2,7 @@
  * Aubi Rest Api client
  */ 
 const Aubi = (()=>{
-  const aubiApi = PropertiesService.getScriptProperties().getProperty('AUBI_API_BASE_URL')
-    || 'https://aubi.synology.me:4444/api'
+  const aubiApi = 'https://aubi.synology.me:4444/api'
   const options_get = {
     'method' : 'get',
     "headers" : {    
@@ -293,8 +292,7 @@ function testAubiGetIndustryVelocity() {
  * Aubi Rest Api client
  */ 
 const Aubi = (()=>{
-  const aubiApi = PropertiesService.getScriptProperties().getProperty('AUBI_API_BASE_URL')
-    || 'https://aubi.synology.me:4444/api'
+  const aubiApi = 'https://aubi.synology.me:4444/api'
   const options_get = {
     'method' : 'get',
     "headers" : {    
