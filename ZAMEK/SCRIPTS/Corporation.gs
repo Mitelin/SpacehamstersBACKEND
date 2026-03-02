@@ -55,6 +55,21 @@ const Corporation = (()=>{
   var hangarsResMap;  // corporate hangars for research jobs
   var hangarsCapMap;  // corporate hangars for capital manufacturing jobs
 
+  // In-memory memoization for a single Apps Script execution.
+  // Goal: avoid re-reading large cache sheets (Assets/IndustryJobs/Blueprinty) multiple times
+  // during multi-project pipelines like runUpdateAllProjects().
+  var _cacheMemo = {
+    assets: null,
+    jobs: null,
+    blueprints: null,
+  };
+
+  var _resetMemo = function() {
+    _cacheMemo.assets = null;
+    _cacheMemo.jobs = null;
+    _cacheMemo.blueprints = null;
+  }
+
   const corpSAGMap = new Map();
   corpSAGMap.set('CorpSAG1', 'Research');
   corpSAGMap.set('CorpSAG2', 'Industry skladka');
@@ -751,6 +766,9 @@ const Corporation = (()=>{
     * Updates corporate assets sheet
     */
     syncAssets: function() {
+      // underlying sheet will be rewritten -> invalidate memo
+      _cacheMemo.assets = null;
+
       // clear the sheet contents
       var lastRow = assetsSheet.getLastRow();
       var range;
@@ -782,6 +800,11 @@ const Corporation = (()=>{
      */ 
     loadAssets: function() {
       Logger.log ('### Loading corporate assets ...')
+
+      // If runtime is warm and memo is present, only reuse it while it is still valid.
+      if (_cacheMemo.assets && _cacheMemo.assets.expires && (new Date().getTime() <= _cacheMemo.assets.expires)) {
+        return _cacheMemo.assets;
+      }
 
       let date = new Date().getTime()
       var assets = {};
@@ -820,9 +843,11 @@ const Corporation = (()=>{
 
 //        console.log(assets);
 
+        _cacheMemo.assets = assets;
         return assets;
 
       } else {
+        _cacheMemo.assets = [];
         return [];
       }
     },
@@ -831,6 +856,9 @@ const Corporation = (()=>{
     * Updates corporate industry jobs sheet
     */
     syncJobs: function() {
+
+      // underlying sheet will be rewritten -> invalidate memo
+      _cacheMemo.jobs = null;
 
       // clean insustry jobs sheet
       var lastRow = industryJobsSheet.getLastRow();
@@ -887,6 +915,11 @@ const Corporation = (()=>{
     loadJobs: function() {
       Logger.log ('### Loading corporate jobs ...')
 
+      // If runtime is warm and memo is present, only reuse it while it is still valid.
+      if (_cacheMemo.jobs && _cacheMemo.jobs.expires && (new Date().getTime() <= _cacheMemo.jobs.expires)) {
+        return _cacheMemo.jobs;
+      }
+
       let date = new Date().getTime()
       var jobs = {};
       jobs.data = [];
@@ -941,9 +974,11 @@ const Corporation = (()=>{
 
 //        console.log(jobs);
 
+        _cacheMemo.jobs = jobs;
         return jobs;
 
       } else {
+        _cacheMemo.jobs = [];
         return [];
       }
     },
@@ -953,6 +988,9 @@ const Corporation = (()=>{
     * Updates corporate blueprints sheet
     */
     syncBlueprints: function() {
+      // underlying sheet will be rewritten -> invalidate memo
+      _cacheMemo.blueprints = null;
+
       // clear the sheet contents
       var lastRow = blueprintsSheet.getLastRow();
       var range;
@@ -982,6 +1020,11 @@ const Corporation = (()=>{
      */ 
     loadBlueprints: function() {
       Logger.log ('### Loading corporate blueprints ...')
+
+      // If runtime is warm and memo is present, only reuse it while it is still valid.
+      if (_cacheMemo.blueprints && _cacheMemo.blueprints.expires && (new Date().getTime() <= _cacheMemo.blueprints.expires)) {
+        return _cacheMemo.blueprints;
+      }
 
       let date = new Date().getTime()
       var blueprints = {};
@@ -1026,11 +1069,18 @@ const Corporation = (()=>{
 
 //        console.log(blueprints);
 
+        _cacheMemo.blueprints = blueprints;
         return blueprints;
 
       } else {
+        _cacheMemo.blueprints = [];
         return [];
       }
+    },
+
+    // Manual memo reset (useful at the beginning of pipelines)
+    resetMemo: function() {
+      _resetMemo();
     },
 
 

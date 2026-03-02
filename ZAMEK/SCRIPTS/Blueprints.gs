@@ -1899,6 +1899,10 @@ function runUpdateProject() {
 }
 
 function runUpdateAllProjects() {
+  // Ensure per-execution caches start clean (Apps Script runtime may be warm).
+  if (typeof Corporation !== 'undefined' && Corporation.resetMemo) {
+    Corporation.resetMemo();
+  }
   /*
   var sheet = SpreadsheetApp.getActive().getSheetByName('Projekt ALPRO 1')
   sheet.activate()
