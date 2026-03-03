@@ -214,6 +214,20 @@ const Calculator = (() => {
     return v;
   };
 
+  const priceBuy = (typeName) => {
+    const p = priceList.getPrice(typeName);
+    const v = p ? Number(p.jitaBuyTop5) : NaN;
+    if (isNaN(v) || v <= 0) return null;
+    return v;
+  };
+
+  const priceSplit = (typeName) => {
+    const p = priceList.getPrice(typeName);
+    const v = p ? Number(p.jitaSplitTop5) : NaN;
+    if (isNaN(v) || v <= 0) return null;
+    return v;
+  };
+
   const priceAdjusted = (typeName) => {
     const p = priceList.getPrice(typeName);
     const v = p ? Number(p.eveAdjusted) : NaN;
@@ -249,6 +263,8 @@ const Calculator = (() => {
       excess: [],
       jobs: [],
       materialCostGross: 0,
+      materialCostBuyTop5: 0,
+      materialCostSplitTop5: 0,
       excessMaterialsValue: 0,
       materialCost: 0,
       materialCostNetIfSellExcess: 0,
@@ -259,6 +275,8 @@ const Calculator = (() => {
     // 1) Material cost (gross): use TOTAL INPUT materials (across the whole chain)
     // and price them by our pricelist Jita Sell Top5 (matches Cookbook priceMode=sell).
     let materialCostGross = 0;
+    let materialCostBuyTop5 = 0;
+    let materialCostSplitTop5 = 0;
     const materials = Array.isArray(data.materials) ? data.materials : [];
     const inputs = materials.filter(m => m && m.isInput);
     for (let i = 0; i < inputs.length; i++) {
@@ -272,6 +290,14 @@ const Calculator = (() => {
         throw ('Chybí cena (Jita sell) pro: ' + name);
       }
       materialCostGross += qty * unit;
+
+      // Debug-only: alternate price modes for explaining deltas.
+      if (dbg) {
+        const ub = priceBuy(name);
+        if (ub != null) materialCostBuyTop5 += qty * ub;
+        const us = priceSplit(name);
+        if (us != null) materialCostSplitTop5 += qty * us;
+      }
 
       if (dbg) {
         dbg.materials.push({ type: name, qty, unit, cost: qty * unit });
@@ -418,6 +444,8 @@ const Calculator = (() => {
 
     if (dbg) {
       dbg.materialCostGross = materialCostGross;
+      dbg.materialCostBuyTop5 = materialCostBuyTop5;
+      dbg.materialCostSplitTop5 = materialCostSplitTop5;
       dbg.excessMaterialsValue = excessMaterialsValue;
       dbg.materialCost = materialCost;
       dbg.materialCostNetIfSellExcess = materialCostNetIfSellExcess;
@@ -721,6 +749,8 @@ const Calculator = (() => {
           lines.push('producedQty: ' + String(dbg.producedQuantity));
           // Cookbook semantics: totalCost = materialCost + jobCost; excess is informational.
           if (dbg.materialCost != null) lines.push('materialCost: ' + formatIsk(dbg.materialCost));
+          if (dbg.materialCostBuyTop5 != null) lines.push('materialCost(buyTop5, internal debug): ' + formatIsk(dbg.materialCostBuyTop5));
+          if (dbg.materialCostSplitTop5 != null) lines.push('materialCost(splitTop5, internal debug): ' + formatIsk(dbg.materialCostSplitTop5));
           if (dbg.excessMaterialsValue != null) lines.push('excessMaterialsValue: ' + formatIsk(dbg.excessMaterialsValue));
           if (dbg.materialCostNetIfSellExcess != null) lines.push('materialCostNetIfSellExcess: ' + formatIsk(dbg.materialCostNetIfSellExcess));
           lines.push('jobCost: ' + formatIsk(dbg.jobCost));
