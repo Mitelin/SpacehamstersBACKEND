@@ -48,6 +48,10 @@ py_backend/SDE CCP/
 CONTEXTPREPIS.MD
 uzivatele.md
 
+# Project-specific: ignore local server notes + scratch context folder
+SERVER_SSH_QUICKSTART.md
+kontext/
+
 # Project-specific: ignore launcher notes
 LAUNCHER.md
 
