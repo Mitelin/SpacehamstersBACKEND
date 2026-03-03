@@ -295,6 +295,9 @@ const Calculator = (() => {
       for (let j = 0; j < jobsAll.length; j++) {
         const job = jobsAll[j];
         if (!job) continue;
+        // Do NOT treat the final requested output (level 1) as "excess".
+        // Nothing consumes the finished product inside the chain, so it would always appear as leftover.
+        if (Number(job.level) === 1) continue;
         const product = job.product;
         if (!product) continue;
         if (String(product).endsWith('Blueprint')) continue;
