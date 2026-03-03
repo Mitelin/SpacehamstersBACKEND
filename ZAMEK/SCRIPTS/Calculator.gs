@@ -20,6 +20,7 @@ const Calculator = (() => {
 
   const MAX_DEBUG_MATERIAL_LINES = 30;
   const MAX_DEBUG_JOB_LINES = 30;
+  const MAX_DEBUG_EXCESS_LINES = 20;
 
   const getTargetSheet = (sheet) => {
     if (sheet) return sheet;
@@ -173,11 +174,11 @@ const Calculator = (() => {
       types: [{ typeId: blueprintTypeId, amount: 1 }],
       shipT1ME: 10,
       shipT1TE: 10,
-      shipT2ME: 10,
+      shipT2ME: 0,
       shipT2TE: 0,
       moduleT1ME: 10,
       moduleT1TE: 10,
-      moduleT2ME: 10,
+      moduleT2ME: 0,
       moduleT2TE: 0,
       produceFuelBlocks: false,
       buildT1: false,
@@ -245,15 +246,18 @@ const Calculator = (() => {
       sccSurchargeRate: SCC_SURCHARGE_RATE,
       missingPrices: [],
       materials: [],
+      excess: [],
       jobs: [],
+      materialCostGross: 0,
+      excessMaterialsValue: 0,
       materialCost: 0,
       jobCost: 0,
       producedQuantity: null,
     } : null;
 
-    // 1) Material cost: use TOTAL INPUT materials (across the whole chain)
+    // 1) Material cost (gross): use TOTAL INPUT materials (across the whole chain)
     // and price them by our pricelist Jita Sell Top5 (matches Cookbook priceMode=sell).
-    let materialCost = 0;
+    let materialCostGross = 0;
     const materials = Array.isArray(data.materials) ? data.materials : [];
     const inputs = materials.filter(m => m && m.isInput);
     for (let i = 0; i < inputs.length; i++) {
@@ -266,14 +270,84 @@ const Calculator = (() => {
         if (dbg) dbg.missingPrices.push({ type: name, price: 'jitaSellTop5' });
         throw ('Chybí cena (Jita sell) pro: ' + name);
       }
-      materialCost += qty * unit;
+      materialCostGross += qty * unit;
 
       if (dbg) {
         dbg.materials.push({ type: name, qty, unit, cost: qty * unit });
       }
     }
 
+    // 1b) Excess materials value: value of over-produced intermediate items.
+    // Cookbook reports `excessMaterialsValue` and typically nets it out from material cost.
+    // We approximate it by comparing total produced vs total consumed for each intermediate type.
+    let excessMaterialsValue = 0;
+    {
+      const producedByType = new Map();
+      const consumedByType = new Map();
+      const jobsAll = Array.isArray(data.jobs) ? data.jobs : [];
+
+      const addMap = (m, k, v) => {
+        if (!k || isNaN(v) || v === 0) return;
+        m.set(k, (Number(m.get(k)) || 0) + v);
+      };
+
+      // Produced totals
+      for (let j = 0; j < jobsAll.length; j++) {
+        const job = jobsAll[j];
+        if (!job) continue;
+        const product = job.product;
+        if (!product) continue;
+        if (String(product).endsWith('Blueprint')) continue;
+        const runs = Number(job.runs);
+        const perRunOut = Number(job.quantity);
+        if (isNaN(runs) || runs <= 0) continue;
+        if (isNaN(perRunOut) || perRunOut <= 0) continue;
+        addMap(producedByType, String(product), runs * perRunOut);
+      }
+
+      // Consumed totals (job.materials quantities are already totals for that job)
+      for (let j = 0; j < jobsAll.length; j++) {
+        const job = jobsAll[j];
+        if (!job) continue;
+        const mats = Array.isArray(job.materials) ? job.materials : [];
+        for (let k = 0; k < mats.length; k++) {
+          const mm = mats[k];
+          if (!mm) continue;
+          const t = mm.type;
+          if (!t) continue;
+          if (String(t).endsWith('Blueprint')) continue;
+          const q = Number(mm.quantity);
+          if (isNaN(q) || q <= 0) continue;
+          addMap(consumedByType, String(t), q);
+        }
+      }
+
+      // Excess = produced - consumed
+      const lines = [];
+      producedByType.forEach((producedQty, typeName) => {
+        const consumedQty = Number(consumedByType.get(typeName)) || 0;
+        const excessQty = producedQty - consumedQty;
+        if (excessQty <= 0) return;
+        const unit = priceSell(typeName);
+        if (unit == null) return;
+        const value = excessQty * unit;
+        if (value <= 0) return;
+        excessMaterialsValue += value;
+        if (dbg) lines.push({ type: typeName, qty: excessQty, unit, value });
+      });
+
+      if (dbg && lines.length) {
+        lines.sort((a, b) => Number(b.value) - Number(a.value));
+        dbg.excess = lines.slice(0, MAX_DEBUG_EXCESS_LINES);
+      }
+    }
+
+    // Net material cost (matches Cookbook's style: show excess separately but use net for total)
+    const materialCost = materialCostGross - excessMaterialsValue;
+
     // 2) Job cost: approximate installation cost using adjusted price + ESI system cost index.
+    // IMPORTANT: SCC surcharge + facility tax are applied on the job BASE value (not on the index fee).
+    // This matches common industry fee formulas and aligns better with Cookbook breakdowns.
     // We sum manufacturing+reaction job costs across all jobs.
     let jobCost = 0;
     const jobs = Array.isArray(data.jobs) ? data.jobs : [];
@@ -306,11 +380,10 @@ const Calculator = (() => {
       }
 
       if (base > 0) {
-        let cost = base * idx;
-        const tax = facilityTaxRate > 0 ? cost * facilityTaxRate : 0;
-        cost += tax;
-        const scc = SCC_SURCHARGE_RATE > 0 ? cost * SCC_SURCHARGE_RATE : 0;
-        cost += scc;
+        const fee = base * idx;
+        const tax = facilityTaxRate > 0 ? base * facilityTaxRate : 0;
+        const scc = SCC_SURCHARGE_RATE > 0 ? base * SCC_SURCHARGE_RATE : 0;
+        const cost = fee + tax + scc;
         jobCost += cost;
 
         if (dbg) {
@@ -320,6 +393,7 @@ const Calculator = (() => {
             runs: isNaN(runs) ? null : runs,
             baseValue: base,
             costIndex: idx,
+            fee,
             tax,
             scc,
             jobCost: cost,
@@ -337,6 +411,8 @@ const Calculator = (() => {
     const perUnit = (materialCost + jobCost) / producedQty;
 
     if (dbg) {
+      dbg.materialCostGross = materialCostGross;
+      dbg.excessMaterialsValue = excessMaterialsValue;
       dbg.materialCost = materialCost;
       dbg.jobCost = jobCost;
       dbg.producedQuantity = producedQty;
@@ -479,13 +555,20 @@ const Calculator = (() => {
           data.forEach(entry => {
             if (!entry) return;
             const status = (typeof entry.status === 'string') ? Number(entry.status) : entry.status;
+            const message = entry.message;
+
+            // If Cookbook returned a per-blueprint error, try to attach it to the right row.
             if (status !== 200) {
-              if (debug) {
-                // We don't know blueprintTypeId reliably here; skip per-row note.
+              if (debug && message && typeof message === 'object') {
+                const bpIdErr = message.blueprintTypeId ?? message.blueprintTypeID ?? message.blueprint_type_id;
+                if (bpIdErr != null) {
+                  const rowsErr = rowByBlueprintId.get(String(bpIdErr)) || [];
+                  rowsErr.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, 'Cookbook status=' + status + '\n' + JSON.stringify(message, null, 2)));
+                }
               }
               return;
             }
-            const message = entry.message;
+
             if (!message) return;
             const blueprintTypeId =
               message.blueprintTypeId ??
@@ -496,6 +579,29 @@ const Calculator = (() => {
             if (blueprintTypeId == null || cost == null) return;
             const rows = rowByBlueprintId.get(String(blueprintTypeId)) || [];
             rows.forEach(r => { outCookbook[r][0] = cost; });
+
+            if (debug) {
+              const noteLines = [];
+              noteLines.push('status: ' + status);
+              if (message.blueprintName) noteLines.push('blueprint: ' + message.blueprintName);
+              noteLines.push('blueprintTypeId: ' + blueprintTypeId);
+              if (message.producedQuantity != null) noteLines.push('producedQuantity: ' + message.producedQuantity);
+              if (message.materialCost != null) noteLines.push('materialCost: ' + formatIsk(message.materialCost));
+              if (message.jobCost != null) noteLines.push('jobCost: ' + formatIsk(message.jobCost));
+              if (message.excessMaterialsValue != null) noteLines.push('excessMaterialsValue: ' + formatIsk(message.excessMaterialsValue));
+              if (message.totalCost != null) noteLines.push('totalCost: ' + formatIsk(message.totalCost));
+              noteLines.push('buildCostPerUnit: ' + formatIsk(cost));
+              noteLines.push('--- request params ---');
+              noteLines.push('system: ' + systemName);
+              noteLines.push('priceMode: sell');
+              noteLines.push('baseMe: 10');
+              noteLines.push('componentsMe: 10');
+              const facility = getDefaultFacilityConfig();
+              noteLines.push('industry: ' + facility.industryStructureType + ' rig ' + facility.industryRig);
+              noteLines.push('reaction: ' + facility.reactionStructureType + ' rig ' + facility.reactionRig);
+              noteLines.push('facilityTax%: ' + facility.facilityTax);
+              rows.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, noteLines.join('\n')));
+            }
           });
         }
       }
@@ -566,7 +672,9 @@ const Calculator = (() => {
             lines.push('reaction: ' + String(dbg.facility.reactionStructureType) + ' rig ' + String(dbg.facility.reactionRig));
           }
           lines.push('producedQty: ' + String(dbg.producedQuantity));
-          lines.push('materialCost: ' + formatIsk(dbg.materialCost));
+          if (dbg.materialCostGross != null) lines.push('materialCostGross: ' + formatIsk(dbg.materialCostGross));
+          if (dbg.excessMaterialsValue != null) lines.push('excessMaterialsValue: ' + formatIsk(dbg.excessMaterialsValue));
+          lines.push('materialCost(net): ' + formatIsk(dbg.materialCost));
           lines.push('jobCost: ' + formatIsk(dbg.jobCost));
           lines.push('SCC surcharge: ' + String(dbg.sccSurchargeRate));
           if (dbg.system) {
@@ -592,10 +700,18 @@ const Calculator = (() => {
                 ' runs=' + String(j.runs) +
                 ' base=' + formatIsk(j.baseValue) +
                 ' idx=' + String(j.costIndex) +
+                ' fee=' + formatIsk(j.fee) +
                 ' tax=' + formatIsk(j.tax) +
                 ' scc=' + formatIsk(j.scc) +
                 ' cost=' + formatIsk(j.jobCost)
               );
+            });
+          }
+
+          if (Array.isArray(dbg.excess) && dbg.excess.length) {
+            lines.push('--- excess (top by value) ---');
+            dbg.excess.forEach(e => {
+              lines.push(e.type + ' qty=' + String(e.qty) + ' unit=' + formatIsk(e.unit) + ' value=' + formatIsk(e.value));
             });
           }
 
