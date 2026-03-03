@@ -18,6 +18,10 @@ const Calculator = (() => {
   // Keep as a constant so we can calibrate against Cookbook if needed.
   const SCC_SURCHARGE_RATE = 0.04; // 4%
 
+  // Internal material pricing mode. Cookbook's `priceMode=sell` tracks our `jitaSplitTop5` very closely.
+  // Keep configurable for future calibration.
+  const INTERNAL_MATERIAL_PRICE_MODE = 'splitTop5'; // 'sellTop5' | 'buyTop5' | 'splitTop5'
+
   const MAX_DEBUG_MATERIAL_LINES = 30;
   const MAX_DEBUG_JOB_LINES = 30;
   const MAX_DEBUG_EXCESS_LINES = 20;
@@ -228,6 +232,35 @@ const Calculator = (() => {
     return v;
   };
 
+  const priceMaterialInternal = (typeName) => {
+    if (INTERNAL_MATERIAL_PRICE_MODE === 'buyTop5') return priceBuy(typeName);
+    if (INTERNAL_MATERIAL_PRICE_MODE === 'sellTop5') return priceSell(typeName);
+    // default
+    return priceSplit(typeName);
+  };
+
+  const resolveMaterialMultipliers = (facility) => {
+    // Mirror backend resolve_material_multipliers() for parity.
+    const st = String((facility && facility.industryStructureType) || '').trim().toLowerCase();
+    const manufacturingRoleBonus = (st === '' || st === 'station') ? 1.0 : 0.99;
+
+    const rig = String((facility && facility.industryRig) || '').trim().toUpperCase();
+    let manufacturingRigBonus = 1.0;
+    if (rig === 'T1') manufacturingRigBonus = 0.976;
+    else if (rig === 'T2') manufacturingRigBonus = 0.958;
+
+    const rrig = String((facility && facility.reactionRig) || '').trim().toUpperCase();
+    let reactionRigBonus = 1.0;
+    if (rrig === 'T1') reactionRigBonus = 0.986;
+    else if (rrig === 'T2') reactionRigBonus = 0.974;
+
+    return {
+      manufacturingRoleBonus,
+      manufacturingRigBonus,
+      reactionRigBonus,
+    };
+  };
+
   const priceAdjusted = (typeName) => {
     const p = priceList.getPrice(typeName);
     const v = p ? Number(p.eveAdjusted) : NaN;
@@ -248,6 +281,7 @@ const Calculator = (() => {
     const data = fetchBlueprintCalculation(blueprintTypeId);
     const facility = getDefaultFacilityConfig();
     const facilityTaxRate = (Number(facility.facilityTax) || 0) / 100.0;
+    const multipliers = resolveMaterialMultipliers(facility);
 
     const dbg = debug ? {
       blueprintTypeId,
@@ -273,7 +307,7 @@ const Calculator = (() => {
     } : null;
 
     // 1) Material cost (gross): use TOTAL INPUT materials (across the whole chain)
-    // and price them by our pricelist Jita Sell Top5 (matches Cookbook priceMode=sell).
+    // and price them by our pricelist (Cookbook sell-mode matches our splitTop5 closely).
     let materialCostGross = 0;
     let materialCostBuyTop5 = 0;
     let materialCostSplitTop5 = 0;
@@ -284,10 +318,10 @@ const Calculator = (() => {
       const name = m.material;
       const qty = Number(m.quantity);
       if (!name || isNaN(qty) || qty <= 0) continue;
-      const unit = priceSell(name);
+      const unit = priceMaterialInternal(name);
       if (unit == null) {
-        if (dbg) dbg.missingPrices.push({ type: name, price: 'jitaSellTop5' });
-        throw ('Chybí cena (Jita sell) pro: ' + name);
+        if (dbg) dbg.missingPrices.push({ type: name, price: INTERNAL_MATERIAL_PRICE_MODE });
+        throw ('Chybí cena (' + INTERNAL_MATERIAL_PRICE_MODE + ') pro: ' + name);
       }
       materialCostGross += qty * unit;
 
@@ -412,9 +446,16 @@ const Calculator = (() => {
       }
 
       if (base > 0) {
-        const fee = base * idx;
-        const tax = facilityTaxRate > 0 ? base * facilityTaxRate : 0;
-        const scc = SCC_SURCHARGE_RATE > 0 ? base * SCC_SURCHARGE_RATE : 0;
+        // Apply facility multipliers to job base (matches observed Cookbook parity).
+        // Manufacturing: structure role bonus + rig bonus. Reactions: reaction rig bonus.
+        let baseMultiplier = 1.0;
+        if (esiActivity === 'manufacturing') baseMultiplier = multipliers.manufacturingRoleBonus * multipliers.manufacturingRigBonus;
+        else if (esiActivity === 'reaction') baseMultiplier = multipliers.reactionRigBonus;
+
+        const effBase = base * baseMultiplier;
+        const fee = effBase * idx;
+        const tax = facilityTaxRate > 0 ? effBase * facilityTaxRate : 0;
+        const scc = SCC_SURCHARGE_RATE > 0 ? effBase * SCC_SURCHARGE_RATE : 0;
         const cost = fee + tax + scc;
         jobCost += cost;
 
@@ -424,6 +465,8 @@ const Calculator = (() => {
             esiActivity,
             runs: isNaN(runs) ? null : runs,
             baseValue: base,
+            baseMultiplier,
+            effectiveBaseValue: effBase,
             costIndex: idx,
             fee,
             tax,
