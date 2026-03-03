@@ -398,9 +398,15 @@ function testxxx() {
 var priceList = {
   l_data: null,       // nacteny cenik
 
-  init: function () {
+  init: function (force) {
+    if (!force && this.l_data) return;
+
     // nacti data ze sheetu
     var lastRow = pricelistSheet.getLastRow();
+    if (lastRow <= 1) {
+      this.l_data = [];
+      return;
+    }
     this.l_data = pricelistSheet.getRange(2, 1, lastRow - 1, pricecolEVE + 19).getValues();
 //    console.log(this.l_data[0]);
   },
@@ -659,7 +665,7 @@ function pricelistGetVolumes () {
   pricelistSheet.getRange(2, 10, lastRow - 1, 4).setValue("");
 
  // inicializuj cenik
-  priceList.init();
+  priceList.init(true);
  
   // fetch volumes
   volumes = getTypeVolumes();

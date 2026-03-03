@@ -172,7 +172,7 @@ const Universe = (()=>{
   var getMainMap = function() {
     if (!mainMap) {
       // load characters from spreadsheet
-      Logger.log ('### Loading Mains ...')
+      if (_TRACE) Logger.log('### Loading Mains ...')
       var lastRow = jobHistorySheet.getLastRow();
 
       if (lastRow > 1) {
@@ -196,7 +196,7 @@ const Universe = (()=>{
   var getLocationsMap = function() {
     if (!locationsMap) {
       // load locations from spreadsheet
-      Logger.log ('### Loading Locations ...')
+      if (_TRACE) Logger.log('### Loading Locations ...')
       var lastRow = locationsSheet.getLastRow();
 
       if (lastRow > 1) {

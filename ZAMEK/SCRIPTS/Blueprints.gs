@@ -389,55 +389,113 @@ const Blueprints = (()=>{
     * Recalculates to-do jobs
     */
     recalculateProject: function(sheet, notify = true) {
+      const _time = (label, fn) => (typeof Perf !== 'undefined' && Perf.time) ? Perf.time(label, fn) : fn();
+
       if (!sheet) {
         // zjisti otevreny sheet, ze ktereho je skript spusteny
         sheet = SpreadsheetApp.getActive().getActiveSheet();
         validateActiveSheet(sheet);
       }
+      const _sheetName = sheet.getName();
       var lastRow = sheet.getLastRow();
 
       // open sidebar
 //      Sidebar.open();
 //      Sidebar.add("Mažu stav skladů a jobů");
 
-      // clear running jobs column
-      range = sheet.getRange(firstDataRow, colJobs, maxJobs, 1);
-      range.setValue("");
+      _time(_sheetName + ' recalc clear columns', () => {
+        // clear running jobs column
+        range = sheet.getRange(firstDataRow, colJobs, maxJobs, 1);
+        range.setValue("");
 
-      // clear required products column
-      range = sheet.getRange(firstDataRow, colJobs + 1, maxJobs, 1);
-      range.setValue(0);
+        // clear required products column
+        range = sheet.getRange(firstDataRow, colJobs + 1, maxJobs, 1);
+        range.setValue(0);
 
-      // clear required input materials
-      range = sheet.getRange(firstDataRow, colInput + 9, maxJobs, 6);
-      range.setValue(0);
+        // clear required input materials
+        range = sheet.getRange(firstDataRow, colInput + 9, maxJobs, 6);
+        range.setValue(0);
 
-      // clear job run costs and note
-      range = sheet.getRange(firstDataRow, colRunCost, maxJobs, 2);
-      range.setValue("");
+        // clear job run costs and note
+        range = sheet.getRange(firstDataRow, colRunCost, maxJobs, 2);
+        range.setValue("");
+      });
 
 
       // initiate arrays
-      var plannedJobs = sheet.getRange(firstDataRow, 1, maxJobs, 22).getValues();
-      var inputMaterials = sheet.getRange(firstDataRow, colInput, maxJobs, 21).getValues();
+      var plannedJobs;
+      var inputMaterials;
+      let plannedCount = 0;
+      let inputCount = 0;
+      _time(_sheetName + ' recalc read tables', () => {
+        // Avoid reading maxJobs rows just to find the used size.
+        // We assume the key columns are contiguous until the first blank.
+        const countContiguousRows = (startRow, col, maxRows) => {
+          const firstVal = sheet.getRange(startRow, col, 1, 1).getValue();
+          if (!firstVal) return 0;
+          const lastDataRow = sheet.getRange(startRow, col, 1, 1)
+            .getNextDataCell(SpreadsheetApp.Direction.DOWN)
+            .getRow();
+          const count = lastDataRow - startRow + 1;
+          return Math.min(maxRows, Math.max(0, count));
+        };
 
-      const plannedCount = (() => {
-        let n = 0;
-        while (n < plannedJobs.length && plannedJobs[n][0]) n++;
-        return n;
-      })();
-      const inputCount = (() => {
-        let n = 0;
-        while (n < inputMaterials.length && inputMaterials[n][0]) n++;
-        return n;
-      })();
+        plannedCount = countContiguousRows(firstDataRow, 1, maxJobs);
+        inputCount = countContiguousRows(firstDataRow, colInput, maxJobs);
+
+        plannedJobs = plannedCount > 0
+          ? sheet.getRange(firstDataRow, 1, plannedCount, 22).getValues()
+          : [];
+        inputMaterials = inputCount > 0
+          ? sheet.getRange(firstDataRow, colInput, inputCount, 21).getValues()
+          : [];
+      });
+
+      // Build lookup maps to avoid repeated O(n) findIndex/find
+      const plannedIndexByProduct = new Map();
+      const plannedIndexByBlueprintAction = new Map();
+      for (let r = 0; r < plannedCount; r++) {
+        const productName = plannedJobs[r][0];
+        if (productName && !plannedIndexByProduct.has(productName)) {
+          plannedIndexByProduct.set(productName, r);
+        }
+
+        const blueprintName = plannedJobs[r][1];
+        const actionName = plannedJobs[r][3];
+        if (blueprintName && actionName) {
+          const key = blueprintName + '|' + actionName;
+          if (!plannedIndexByBlueprintAction.has(key)) {
+            plannedIndexByBlueprintAction.set(key, r);
+          }
+        }
+      }
+      const inputIndexByName = new Map();
+      for (let r = 0; r < inputCount; r++) {
+        const materialName = inputMaterials[r][0];
+        if (materialName && !inputIndexByName.has(materialName)) {
+          inputIndexByName.set(materialName, r);
+        }
+      }
+
+      // Parse materials JSON once per planned job row
+      const safeParseMaterials = (value) => {
+        if (value === null || typeof value === 'undefined' || value === '') return null;
+        try { return JSON.parse(value); } catch (e) { return null; }
+      };
+      const materialsByRow = new Array(plannedCount);
+      for (let r = 0; r < plannedCount; r++) {
+        materialsByRow[r] = safeParseMaterials(plannedJobs[r][7]);
+      }
 //      var manufactureMaterials = sheet.getRange(firstDataRow, colManuf, maxJobs, 2).getValues();
 //      var reactionMaterials = sheet.getRange(firstDataRow, colReact, maxJobs, 2).getValues();
 //      var interimMaterials = sheet.getRange(firstDataRow, colManufBuffer, maxJobs, 2).getValues();                      // asi rozsirit na dalsi hangar
 
       // read cost indices
-      var range = sheet.getRange(3, 9, 8, 1);
-      var costIndices = range.getValues();
+      var costIndices;
+      _time(_sheetName + ' recalc read params', () => {
+        var range = sheet.getRange(3, 9, 8, 1);
+        costIndices = range.getValues();
+      });
       let manufacturingSystemCost = costIndices[0][0];
       let manufacturingBonus = costIndices[1][0];
       let reactionSystemCost = costIndices[2][0];
@@ -448,39 +506,53 @@ const Blueprints = (()=>{
       let inventionBonus = costIndices[7][0];
 
       // zjisti ze sheetu parametry blueprintu
-      range = sheet.getRange(1, 2, 11, 1);
-      var params = range.getValues();
+      var params;
+      _time(_sheetName + ' recalc read blueprint params', () => {
+        range = sheet.getRange(1, 2, 11, 1);
+        params = range.getValues();
+      });
       var useBufferHangars = (params[3][0] == 'Ne')?false:true;
 
       // load prices
-      priceList.init();
+      _time(_sheetName + ' recalc load prices', () => priceList.init());
 
       /* 
       * Update quantities in running jobs
       */
-      var range = sheet.getRange(firstDataRow, colJobsList, lastRow, 5);
-      var jobs = range.getValues();
+      var jobs;
+      _time(_sheetName + ' recalc read running jobs', () => {
+        const rowsToRead = Math.min(maxJobs, Math.max(0, lastRow - firstDataRow + 1));
+        if (rowsToRead > 0) {
+          var range = sheet.getRange(firstDataRow, colJobsList, rowsToRead, 5);
+          jobs = range.getValues();
+        } else {
+          jobs = [];
+        }
+      });
       
-      jobs.forEach(job => {
-        if (job[3]) {
-          // find corresponding row in planned jobs
-          var plannedJob = plannedJobs.findIndex(element => element[1] == job[3] && element[3] == job[2]);
-          if (plannedJob >= 0) {
-            // found!
-            if (job[2] == "Copying") {
-              // for copying activity count total BPC runs being produced: copies (runs) * licensedRuns
-              plannedJobs[plannedJob][11] = (Number(job[1]) * Number(job[4])) + Number(plannedJobs[plannedJob][11]);
-            } else if (job[2] == "Invention") {
-              // for invention activity calculate number of output items ... apply Symetry Decryptor runs + 2 ... 
-              // TODO: apply probability
-              plannedJobs[plannedJob][11] = job[1] * (plannedJobs[plannedJob][8] + 2) + Number(plannedJobs[plannedJob][11]);
-            } else {
-              // for other activities calculate number of output items
-              plannedJobs[plannedJob][11] = job[1] * plannedJobs[plannedJob][8] + Number(plannedJobs[plannedJob][11]);
+      _time(_sheetName + ' recalc apply running jobs', () => {
+        jobs.forEach(job => {
+          if (job[3]) {
+            // find corresponding row in planned jobs
+            const key = job[3] + '|' + job[2];
+            const plannedJob = plannedIndexByBlueprintAction.has(key) ? plannedIndexByBlueprintAction.get(key) : -1;
+            if (plannedJob >= 0) {
+              // found!
+              if (job[2] == "Copying") {
+                // for copying activity count total BPC runs being produced: copies (runs) * licensedRuns
+                plannedJobs[plannedJob][11] = (Number(job[1]) * Number(job[4])) + Number(plannedJobs[plannedJob][11]);
+              } else if (job[2] == "Invention") {
+                // for invention activity calculate number of output items ... apply Symetry Decryptor runs + 2 ... 
+                // TODO: apply probability
+                plannedJobs[plannedJob][11] = job[1] * (plannedJobs[plannedJob][8] + 2) + Number(plannedJobs[plannedJob][11]);
+              } else {
+                // for other activities calculate number of output items
+                plannedJobs[plannedJob][11] = job[1] * plannedJobs[plannedJob][8] + Number(plannedJobs[plannedJob][11]);
+              }
             }
           }
-        }
-      })
+        })
+      });
 
       // write in-progress counts (column "Ve výrobě") in one batch
       if (plannedCount > 0) {
@@ -491,24 +563,19 @@ const Blueprints = (()=>{
       /*
        * Calculate how much material is needed for each job
        */
-      let i = plannedJobs.length - 1;
-
-      // skip empty rows at the end
-      while (i >= 0) {
-        if (plannedJobs[i][0]) break;
-        i--;
-      }
+      let i = plannedCount - 1;
 
       if (i == -1) {
         throw ("Není spočítaná výroba")
       }
 
       // process jobs from the final product
+      _time(_sheetName + ' recalc compute requirements', () => {
       do {
         let product = plannedJobs[i][0];
         let action = plannedJobs[i][3];
         let total = plannedJobs[i][6];
-        let materials = JSON.parse(plannedJobs[i][7]);
+        let materials = materialsByRow[i];
         let batchSize = plannedJobs[i][8];
         let isAdvanced = plannedJobs[i][9];
         let inprogress = plannedJobs[i][11];
@@ -556,7 +623,7 @@ const Blueprints = (()=>{
             materials.forEach(material => {
               trace("::: Material: " + material.type + " quantity: " + material.quantity);
 
-              let pos = plannedJobs.findIndex(element => element[0] == material.type);
+              let pos = plannedIndexByProduct.has(material.type) ? plannedIndexByProduct.get(material.type) : -1;
               if (pos >= 0) {
                 // if job is found, increase job output amount
                 // recalculate required amount by batchsize
@@ -578,7 +645,7 @@ const Blueprints = (()=>{
 //                  log = log + "\n" + material.type + " volume " + Math.ceil(material.quantity * todo / total)
               } else {
                 // job not found, look in input materials
-                let pos = inputMaterials.findIndex(element => element[0] == material.type);
+                let pos = inputIndexByName.has(material.type) ? inputIndexByName.get(material.type) : -1;
                 if (pos >= 0) {
                   // if input material is found, increase required amount
                   let q = Math.ceil(material.quantity * todo / total);
@@ -615,11 +682,18 @@ const Blueprints = (()=>{
         i--;
       } while (i >= 0);
 
+      });
+
       // update the planned job status and run cost
       i = 0;
-      let bpos = Corporation.loadBPOs();                // load BPOs from cache
-      let allJobs = Corporation.getJobsCached();        // load all corporation jobs in all hangars
-      let allRunningJobs = allJobs.data.filter(item => item.status == 'active');   // filter only running jobs
+      let bpos;
+      let allJobs;
+      let allRunningJobs;
+      _time(_sheetName + ' recalc load corp context', () => {
+        bpos = Corporation.loadBPOs();                // load BPOs from cache
+        allJobs = Corporation.getJobsCached();        // load all corporation jobs in all hangars
+        allRunningJobs = allJobs.data.filter(item => item.status == 'active');   // filter only running jobs
+      });
       trace(allRunningJobs);
 
       const statusValues = Array.from({ length: plannedCount }, () => ['']);
@@ -627,12 +701,13 @@ const Blueprints = (()=>{
       const runCostValues = Array.from({ length: plannedCount }, () => [0]);
       const runCostNoteValues = Array.from({ length: plannedCount }, () => ['']);
 
+      _time(_sheetName + ' recalc compute status & cost', () => {
       for (let row = 0; row < plannedCount; row++) {
         let product = plannedJobs[row][0];
         let blueprint = plannedJobs[row][1];
         let action = plannedJobs[row][3];
         let runs = plannedJobs[row][4];
-        let materials = JSON.parse(plannedJobs[row][7]);
+        let materials = materialsByRow[row];
         let isAdvanced = plannedJobs[row][9];
         let inprogress = plannedJobs[row][11];
         let required = plannedJobs[row][12];
@@ -680,13 +755,11 @@ const Blueprints = (()=>{
               let materialVolume = 0;
 
               // find amount in input materials
-              let materialRecord = inputMaterials.find(element => element[0] == material.type);
-              if (materialRecord) {
-                materialVolume += materialRecord[15 + sourceHangar];
-              }
+              let materialRecord = (inputIndexByName.has(material.type) ? inputMaterials[inputIndexByName.get(material.type)] : null);
+              if (materialRecord) materialVolume += materialRecord[15 + sourceHangar];
 
               // find amount in job output
-              let jobRecord = plannedJobs.find(element => element[0] == material.type);
+              let jobRecord = (plannedIndexByProduct.has(material.type) ? plannedJobs[plannedIndexByProduct.get(material.type)] : null);
               if (jobRecord) {
                 materialVolume += jobRecord[14 + sourceHangar];
                 if (sourceHangarAlt) materialVolume += jobRecord[14 + sourceHangarAlt];
@@ -775,18 +848,22 @@ const Blueprints = (()=>{
         runCostValues[row][0] = runcost;
       }
 
-      if (plannedCount > 0) {
-        sheet.getRange(firstDataRow, 11, plannedCount, 1).setValues(statusValues);
-        sheet.getRange(firstDataRow, 13, plannedCount, 1).setValues(requiredValues);
-        sheet.getRange(firstDataRow, colRunCost, plannedCount, 1).setValues(runCostValues);
-        sheet.getRange(firstDataRow, colRunCost + 1, plannedCount, 1).setValues(runCostNoteValues);
-      }
+      });
 
-      // update the input material requied amount in one batch
-      if (inputCount > 0) {
-        const inputRequiredValues = inputMaterials.slice(0, inputCount).map(r => [r[9], r[10], r[11], r[12], r[13], r[14]]);
-        sheet.getRange(firstDataRow, colInput + 9, inputCount, 6).setValues(inputRequiredValues);
-      }
+      _time(_sheetName + ' recalc write outputs', () => {
+        if (plannedCount > 0) {
+          sheet.getRange(firstDataRow, 11, plannedCount, 1).setValues(statusValues);
+          sheet.getRange(firstDataRow, 13, plannedCount, 1).setValues(requiredValues);
+          sheet.getRange(firstDataRow, colRunCost, plannedCount, 1).setValues(runCostValues);
+          sheet.getRange(firstDataRow, colRunCost + 1, plannedCount, 1).setValues(runCostNoteValues);
+        }
+
+        // update the input material requied amount in one batch
+        if (inputCount > 0) {
+          const inputRequiredValues = inputMaterials.slice(0, inputCount).map(r => [r[9], r[10], r[11], r[12], r[13], r[14]]);
+          sheet.getRange(firstDataRow, colInput + 9, inputCount, 6).setValues(inputRequiredValues);
+        }
+      });
 
 
       // show result in notification window
@@ -999,7 +1076,22 @@ const Blueprints = (()=>{
 
 
       // planned jobs, to get info of the blueprint
-      var plannedJobs = sheet.getRange(firstDataRow, 1, maxJobs, 22).getValues();
+      // (Keep this read as small as possible; it was previously maxJobs×22.)
+      var plannedJobs;
+      _time(_sheetName + ' read planned jobs', () => {
+        const firstVal = sheet.getRange(firstDataRow, 1, 1, 1).getValue();
+        if (!firstVal) {
+          plannedJobs = [];
+          return;
+        }
+        const lastDataRow = sheet.getRange(firstDataRow, 1, 1, 1)
+          .getNextDataCell(SpreadsheetApp.Direction.DOWN)
+          .getRow();
+        const plannedCount = Math.min(maxJobs, Math.max(0, lastDataRow - firstDataRow + 1));
+        plannedJobs = plannedCount > 0
+          ? sheet.getRange(firstDataRow, 1, plannedCount, 22).getValues()
+          : [];
+      });
 
       // prepare data for material used for jobs started after the hangars were updated
       let newJobs = jobs.data.filter(job => job.startTime > items.lastModified);
