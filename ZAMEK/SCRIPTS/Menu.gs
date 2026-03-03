@@ -22,6 +22,10 @@ function onOpen() {
     .addItem('Načíst: Industry joby', 'syncJobs')
     .addItem('Načíst: Hangáry', 'syncHangars')
     .addItem('Projekty: Aktualizuj vše', 'runUpdateAllProjects')
+    .addSeparator()
+    .addSubMenu(ui.createMenu('Debug')
+      .addItem('Timing: ON', 'perfTimingEnable')
+      .addItem('Timing: OFF', 'perfTimingDisable'))
     .addToUi();
 }
 

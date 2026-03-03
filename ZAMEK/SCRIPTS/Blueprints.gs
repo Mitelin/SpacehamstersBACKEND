@@ -845,11 +845,15 @@ const Blueprints = (()=>{
     * Updates hangar assets and running jobs
     */
     updateProject: function(sheet, notify = true) {
+      const _time = (label, fn) => (typeof Perf !== 'undefined' && Perf.time) ? Perf.time(label, fn) : fn();
+
       if (!sheet) {
         // zjisti otevreny sheet, ze ktereho je skript spusteny
         sheet = SpreadsheetApp.getActive().getActiveSheet();
         validateActiveSheet(sheet);
       }
+      const _sheetName = sheet.getName();
+
       var lastRow = sheet.getLastRow();
 
       Sidebar.open(sheet.getName());
@@ -892,7 +896,7 @@ const Blueprints = (()=>{
         if (!isNaN(personalHangarManufactoringBuffer)) personalHangars.push(personalHangarManufactoringBuffer)
         
         Sidebar.add("Čtu osobní sklad");
-        itemsPersonal = Personal.getAssets(personalHangars);
+        itemsPersonal = _time(_sheetName + ' personal assets', () => Personal.getAssets(personalHangars));
         Sidebar.add("- počet " + itemsPersonal.data.length + " ks");
         Sidebar.add("- stáří " + (itemsPersonal.age / 60).toFixed(2) + " m");
         Sidebar.add("- refresh " + (itemsPersonal.cacheRefresh / 60).toFixed(2) + " m");
@@ -901,7 +905,7 @@ const Blueprints = (()=>{
         sheet.getRange(5, colLog + 1, 1, 1).setValue((itemsPersonal.cacheRefresh / 60).toFixed(2) + " m");
 
         Sidebar.add("Čtu osobní joby");
-        jobsPersonal = Personal.getJobs(personalHangars);
+        jobsPersonal = _time(_sheetName + ' personal jobs', () => Personal.getJobs(personalHangars));
         Sidebar.add("- počet " + jobsPersonal.data.length + " ks");
         Sidebar.add("- stáří " + (jobsPersonal.age / 60).toFixed(2) + " m");
         Sidebar.add("- refresh " + (jobsPersonal.cacheRefresh / 60).toFixed(2) + " m");
@@ -953,42 +957,44 @@ const Blueprints = (()=>{
       * Update hangars 
       */
 
-      // clear sheet manufacturing hangar table contents
-      range = sheet.getRange(firstDataRow, colManuf, lastRow - 10, 2);
-      range.setValue('');
+      _time(_sheetName + ' clear tables', () => {
+        // clear sheet manufacturing hangar table contents
+        range = sheet.getRange(firstDataRow, colManuf, lastRow - 10, 2);
+        range.setValue('');
 
-      // clear sheet reaction hangar table contents
-      range = sheet.getRange(firstDataRow, colReact, lastRow - 10, 2);
-      range.setValue('');
+        // clear sheet reaction hangar table contents
+        range = sheet.getRange(firstDataRow, colReact, lastRow - 10, 2);
+        range.setValue('');
 
-      // clear sheet manufactoring buffer hangar table contents
-      range = sheet.getRange(firstDataRow, colManufBuffer, lastRow - 10, 2);
-      range.setValue('');
+        // clear sheet manufactoring buffer hangar table contents
+        range = sheet.getRange(firstDataRow, colManufBuffer, lastRow - 10, 2);
+        range.setValue('');
 
-      // clear sheet reaction buffer hangar table contents
-      range = sheet.getRange(firstDataRow, colReactBuffer, lastRow - 10, 2);
-      range.setValue('');
+        // clear sheet reaction buffer hangar table contents
+        range = sheet.getRange(firstDataRow, colReactBuffer, lastRow - 10, 2);
+        range.setValue('');
 
-      // clear sheet reaction buffer hangar table contents
-      range = sheet.getRange(firstDataRow, colBPC, lastRow - 10, 3);
-      range.setValue('');
+        // clear sheet reaction buffer hangar table contents
+        range = sheet.getRange(firstDataRow, colBPC, lastRow - 10, 3);
+        range.setValue('');
 
-      // clear sheet research hangar table contents
-      range = sheet.getRange(firstDataRow, colResearch, lastRow - 10, 2);
-      range.setValue('');
-      
-      // clear sheet research buffer hangar table contents
-      range = sheet.getRange(firstDataRow, colResearchBuffer, lastRow - 10, 2);
-      range.setValue('');
+        // clear sheet research hangar table contents
+        range = sheet.getRange(firstDataRow, colResearch, lastRow - 10, 2);
+        range.setValue('');
+        
+        // clear sheet research buffer hangar table contents
+        range = sheet.getRange(firstDataRow, colResearchBuffer, lastRow - 10, 2);
+        range.setValue('');
 
-      // clear sheet jobs table contents
-      range = sheet.getRange(firstDataRow, colJobsList, lastRow - 10, 10);
-      range.setValue('');
+        // clear sheet jobs table contents
+        range = sheet.getRange(firstDataRow, colJobsList, lastRow - 10, 10);
+        range.setValue('');
+      });
 
       // get corporate hangars content
 //      var items = getItemsDirect(hangars);
       Sidebar.add("Čtu korporátní sklad");
-      var items = Corporation.getAssetsCached(hangars);
+      var items = _time(_sheetName + ' corp assets', () => Corporation.getAssetsCached(hangars));
       Sidebar.add("- počet " + items.data.length + " ks");
       Sidebar.add("- stáří " + (items.age / 60).toFixed(2) + " m");
       Sidebar.add("- refresh " + (items.cacheRefresh / 60).toFixed(2) + " m");
@@ -998,7 +1004,7 @@ const Blueprints = (()=>{
       sheet.getRange(3, colLog + 1, 1, 1).setValue((items.cacheRefresh / 60).toFixed(2) + " m");
 
       Sidebar.add("Čtu korporátní joby");
-      var jobs = Corporation.getJobsCached(hangars);
+      var jobs = _time(_sheetName + ' corp jobs', () => Corporation.getJobsCached(hangars));
       Sidebar.add("- počet " + jobs.data.length + " ks");
       Sidebar.add("- stáří " + (jobs.age / 60).toFixed(2) + " m");
       Sidebar.add("- refresh " + (jobs.cacheRefresh / 60).toFixed(2) + " m");
@@ -1009,7 +1015,7 @@ const Blueprints = (()=>{
 
       // get corporation blueprints
       Sidebar.add("Čtu korporátní blueprinty");
-      var bpcs = Corporation.getBlueprintsCached(hangarsBPC);
+      var bpcs = _time(_sheetName + ' corp blueprints', () => Corporation.getBlueprintsCached(hangarsBPC));
       Sidebar.add("- počet " + bpcs.data.length + " ks");
       Sidebar.add("- stáří " + (bpcs.age / 60).toFixed(2) + " m");
       Sidebar.add("- refresh " + (bpcs.cacheRefresh / 60).toFixed(2) + " m");
@@ -1021,17 +1027,18 @@ const Blueprints = (()=>{
 
       // prepare data for material used for jobs started after the hangars were updated
       let newJobs = jobs.data.filter(job => job.startTime > items.lastModified);
-      let blueprintsAll = Corporation.getBlueprintsCached();
-      var newJobMaterials = getMaterialsForNewJobs(plannedJobs, newJobs, blueprintsAll.data)
+      let blueprintsAll = _time(_sheetName + ' all blueprints', () => Corporation.getBlueprintsCached());
+      var newJobMaterials = _time(_sheetName + ' materials for new jobs', () => getMaterialsForNewJobs(plannedJobs, newJobs, blueprintsAll.data))
       console.log (newJobMaterials);
 
       // prepare data for jobs delivered after hangars were updated
       // all jobs, even those completed
-      var alljobs = Corporation.getJobsCached(hangars, true);
+      var alljobs = _time(_sheetName + ' corp jobs (all)', () => Corporation.getJobsCached(hangars, true));
       // filter all jobs delivered after the corporate items cache update
       let deliveredJobs = alljobs.data.filter(job => job.status == 'delivered' && job.completedTime > items.lastModified);
       console.log('deliveredJobs');
       console.log(deliveredJobs);
+
 
 
       /* 
@@ -1899,6 +1906,8 @@ function runUpdateProject() {
 }
 
 function runUpdateAllProjects() {
+  const _time = (label, fn) => (typeof Perf !== 'undefined' && Perf.time) ? Perf.time(label, fn) : fn();
+
   // Ensure per-execution caches start clean (Apps Script runtime may be warm).
   if (typeof Corporation !== 'undefined' && Corporation.resetMemo) {
     Corporation.resetMemo();
@@ -1933,13 +1942,22 @@ function runUpdateAllProjects() {
   Blueprints.updateProject(false);
   */
 
-  Blueprints.updateProject(SpreadsheetApp.getActive().getSheetByName('Projekt ALPRO 1'), false);
-  Blueprints.updateProject(SpreadsheetApp.getActive().getSheetByName('Projekt ALPRO 2'), false);
-  Blueprints.updateProject(SpreadsheetApp.getActive().getSheetByName('Projekt ALPRO 3'), false);
-  Blueprints.updateProject(SpreadsheetApp.getActive().getSheetByName('Projekt ALPRO 4'), false);
-  Blueprints.updateProject(SpreadsheetApp.getActive().getSheetByName('Projekt ALPRO 5'), false);
-  Blueprints.updateProject(SpreadsheetApp.getActive().getSheetByName('Projekt ALPRO 6'), false);
-  Blueprints.updateProject(SpreadsheetApp.getActive().getSheetByName('Projekt ALPRO 7'), false);
+  _time('runUpdateAllProjects', () => {
+    const ss = SpreadsheetApp.getActive();
+    const names = [
+      'Projekt ALPRO 1',
+      'Projekt ALPRO 2',
+      'Projekt ALPRO 3',
+      'Projekt ALPRO 4',
+      'Projekt ALPRO 5',
+      'Projekt ALPRO 6',
+      'Projekt ALPRO 7',
+    ];
+
+    names.forEach(name => {
+      _time('update: ' + name, () => Blueprints.updateProject(ss.getSheetByName(name), false));
+    });
+  });
 
   SpreadsheetApp.getUi().alert('Aktualizace dokončena', '', SpreadsheetApp.getUi().ButtonSet.OK);
 

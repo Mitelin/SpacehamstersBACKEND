@@ -1129,10 +1129,6 @@ const Corporation = (()=>{
       // filter by status
       if (!all) {
         // filter active jobs or jobs delivered after assets/blueprints cache validity
-        let assetsLastModified = assetsSheet.getRange(1,9,1,1).getValue();
-        let blueprintsLastModified = blueprintsSheet.getRange(1,12,1,1).getValue();
-        console.log ("assetsLastModified " + new Date(assetsLastModified) + " (" + assetsLastModified + ") blueprintsLastModified " +  new Date(blueprintsLastModified) + " ()" + blueprintsLastModified + ")");
-
         let jobsFilteredActive = jobsFiltered.filter(
           item => item.status == 'active' 
 //          || (item.completedTime > assetsLastModified && (item.activityName == "Manufacturing" || item.activityName == "Reaction"))
