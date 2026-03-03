@@ -826,11 +826,17 @@ const Corporation = (()=>{
      */ 
     loadAssets: function() {
       if (_cacheMemo.assets && _freezeMemo) {
+        if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo && _cacheMemo.assets.expires) {
+          Sidebar.setCacheInfo({ assetsExpiresMs: Number(_cacheMemo.assets.expires) });
+        }
         return _cacheMemo.assets;
       }
 
       // If runtime is warm and memo is present, only reuse it while it is still valid.
       if (_cacheMemo.assets && _cacheMemo.assets.expires && (new Date().getTime() <= _cacheMemo.assets.expires)) {
+        if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
+          Sidebar.setCacheInfo({ assetsExpiresMs: Number(_cacheMemo.assets.expires) });
+        }
         return _cacheMemo.assets;
       }
 
@@ -844,6 +850,10 @@ const Corporation = (()=>{
       assets.age = Math.trunc((date - assets.lastModified) / 1000);
       assets.cacheRefresh = Math.trunc((assets.expires - date) / 1000);
 
+      if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
+        Sidebar.setCacheInfo({ assetsExpiresMs: Number(assets.expires) });
+      }
+
       // check if asset cache is expired and refresh it
       if (new Date().getTime() > assets.expires) {
         Sidebar.add("Aktualizuju cache skladu");
@@ -853,6 +863,10 @@ const Corporation = (()=>{
         assets.expires = assetsSheet.getRange(1,10,1,1).getValue();
         assets.age = Math.trunc((date - assets.lastModified) / 1000);
         assets.cacheRefresh = Math.trunc((assets.expires - date) / 1000);
+
+        if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
+          Sidebar.setCacheInfo({ assetsExpiresMs: Number(assets.expires) });
+        }
       } else {
         Sidebar.add("Cache skladu je platná do " + new Date(assets.expires));
       }
@@ -954,11 +968,17 @@ const Corporation = (()=>{
     // loads jobs stored in industry sheet
     loadJobs: function() {
       if (_cacheMemo.jobs && _freezeMemo) {
+        if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo && _cacheMemo.jobs.expires) {
+          Sidebar.setCacheInfo({ jobsExpiresMs: Number(_cacheMemo.jobs.expires) });
+        }
         return _cacheMemo.jobs;
       }
 
       // If runtime is warm and memo is present, only reuse it while it is still valid.
       if (_cacheMemo.jobs && _cacheMemo.jobs.expires && (new Date().getTime() <= _cacheMemo.jobs.expires)) {
+        if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
+          Sidebar.setCacheInfo({ jobsExpiresMs: Number(_cacheMemo.jobs.expires) });
+        }
         return _cacheMemo.jobs;
       }
 
@@ -973,12 +993,19 @@ const Corporation = (()=>{
       jobs.cacheRefresh = Math.trunc((jobs.expires - date) / 1000);
       trace(jobs);
 
+      if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
+        Sidebar.setCacheInfo({ jobsExpiresMs: Number(jobs.expires) });
+      }
+
       // check if asset cache is expired and refresh it
       if (date > jobs.expires) {
         Sidebar.add("Aktualizuju cache jobů");
         // syncJobs already returns the translated jobs object (and memoizes it)
         var syncedJobs = _time('syncJobs total', () => this.syncJobs());
         if (syncedJobs) {
+          if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo && syncedJobs.expires) {
+            Sidebar.setCacheInfo({ jobsExpiresMs: Number(syncedJobs.expires) });
+          }
           return syncedJobs;
         }
 
@@ -988,6 +1015,10 @@ const Corporation = (()=>{
         jobs.expires = industryJobsSheet.getRange(1,22,1,1).getValue();
         jobs.age = Math.trunc((date - jobs.lastModified) / 1000);
         jobs.cacheRefresh = Math.trunc((jobs.expires - date) / 1000);
+
+        if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
+          Sidebar.setCacheInfo({ jobsExpiresMs: Number(jobs.expires) });
+        }
       } else {
         Sidebar.add("Cache jobů je platná do " + new Date(jobs.expires));
       }
@@ -1070,11 +1101,17 @@ const Corporation = (()=>{
      */ 
     loadBlueprints: function() {
       if (_cacheMemo.blueprints && _freezeMemo) {
+        if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo && _cacheMemo.blueprints.expires) {
+          Sidebar.setCacheInfo({ blueprintsExpiresMs: Number(_cacheMemo.blueprints.expires) });
+        }
         return _cacheMemo.blueprints;
       }
 
       // If runtime is warm and memo is present, only reuse it while it is still valid.
       if (_cacheMemo.blueprints && _cacheMemo.blueprints.expires && (new Date().getTime() <= _cacheMemo.blueprints.expires)) {
+        if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
+          Sidebar.setCacheInfo({ blueprintsExpiresMs: Number(_cacheMemo.blueprints.expires) });
+        }
         return _cacheMemo.blueprints;
       }
 
@@ -1088,6 +1125,10 @@ const Corporation = (()=>{
       blueprints.age = Math.trunc((date - blueprints.lastModified) / 1000);
       blueprints.cacheRefresh = Math.trunc((blueprints.expires - date) / 1000);
 
+      if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
+        Sidebar.setCacheInfo({ blueprintsExpiresMs: Number(blueprints.expires) });
+      }
+
       // check if asset cache is expired and refresh it
       if (date > blueprints.expires) {
         Sidebar.add("Aktualizuju cache blueprintů");
@@ -1097,6 +1138,10 @@ const Corporation = (()=>{
         blueprints.expires = blueprintsSheet.getRange(1,13,1,1).getValue();
         blueprints.age = Math.trunc((date - blueprints.lastModified) / 1000);
         blueprints.cacheRefresh = Math.trunc((blueprints.expires - date) / 1000);
+
+        if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
+          Sidebar.setCacheInfo({ blueprintsExpiresMs: Number(blueprints.expires) });
+        }
       } else {
         Sidebar.add("Cache blueprintů je platná do " + new Date(blueprints.expires));
       }

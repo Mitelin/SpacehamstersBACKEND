@@ -112,10 +112,36 @@ const Blueprints = (()=>{
    */
   var getFinishedJobProducts = function (plannedJobs, deliveredJobs, hangarId) {
     var ret = [];
+    if (!plannedJobs || plannedJobs.length === 0 || !deliveredJobs || deliveredJobs.length === 0) return ret;
+
+    // Build (and cache) planned job index once per plannedJobs array.
+    // Keyed by productName + \u0000 + blueprintName; value is the first row index (findIndex semantics).
+    if (!plannedJobs.__indexByProductAndBlueprint) {
+      const index = {};
+      for (let i = 0; i < plannedJobs.length; i++) {
+        const row = plannedJobs[i];
+        const key = String(row[0]) + '\u0000' + String(row[1]);
+        if (index[key] == null) index[key] = i;
+      }
+      plannedJobs.__indexByProductAndBlueprint = index;
+    }
+
     // filter delivered jobs for output location in selected hangar
     let filteredJobs;
     if (hangarId) {
-      filteredJobs = deliveredJobs.filter(item => item.outputLocationId == hangarId);
+      // Build (and cache) delivered jobs by outputLocationId once per deliveredJobs array.
+      if (!deliveredJobs.__byOutputLocationId) {
+        const byOutput = {};
+        for (let i = 0; i < deliveredJobs.length; i++) {
+          const job = deliveredJobs[i];
+          const out = job.outputLocationId;
+          if (out == null) continue;
+          if (!byOutput[out]) byOutput[out] = [];
+          byOutput[out].push(job);
+        }
+        deliveredJobs.__byOutputLocationId = byOutput;
+      }
+      filteredJobs = deliveredJobs.__byOutputLocationId[hangarId] || [];
     } else {
       filteredJobs = deliveredJobs;
     }
@@ -125,9 +151,10 @@ const Blueprints = (()=>{
 //     console.log(job);
 
       // find blueprint info
-      var plannedJob = plannedJobs.findIndex(element => element[0] == job.productName && element[1] == job.blueprintName);
+        const key = String(job.productName) + '\u0000' + String(job.blueprintName);
+        var plannedJob = plannedJobs.__indexByProductAndBlueprint[key];
   //    console.log(plannedJob);
-      if (plannedJob >= 0) {
+        if (plannedJob != null) {
           let batchSize = plannedJobs[plannedJob][8];
           let runs = job.successfulRuns;
           
@@ -161,12 +188,38 @@ const Blueprints = (()=>{
    */
   var getMaterialsForNewJobs = function (plannedJobs, newJobs, blueprints) {
     var ret = [];
+    if (!plannedJobs || plannedJobs.length === 0 || !newJobs || newJobs.length === 0) return ret;
+
+    // Cache planned jobs index (shared with getFinishedJobProducts).
+    if (!plannedJobs.__indexByProductAndBlueprint) {
+      const index = {};
+      for (let i = 0; i < plannedJobs.length; i++) {
+        const row = plannedJobs[i];
+        const key = String(row[0]) + '\u0000' + String(row[1]);
+        if (index[key] == null) index[key] = i;
+      }
+      plannedJobs.__indexByProductAndBlueprint = index;
+    }
+
+    // Cache blueprint ME by itemId.
+    if (blueprints && !blueprints.__meByItemId) {
+      const meById = {};
+      for (let i = 0; i < blueprints.length; i++) {
+        const bp = blueprints[i];
+        if (bp && bp.itemId != null && meById[bp.itemId] == null) {
+          meById[bp.itemId] = bp.materialEfficiency;
+        }
+      }
+      blueprints.__meByItemId = meById;
+    }
+
     newJobs.forEach(job => {
   //   console.log(job);
       // find blueprint info
-      var plannedJob = plannedJobs.findIndex(element => element[0] == job.productName && element[1] == job.blueprintName);
+      const key = String(job.productName) + '\u0000' + String(job.blueprintName);
+      var plannedJob = plannedJobs.__indexByProductAndBlueprint[key];
   //    console.log(plannedJob);
-      if (plannedJob >= 0) {
+      if (plannedJob != null) {
           let materials = plannedJobs[plannedJob][7];
           let isAdvanced = plannedJobs[plannedJob][9];
           let roleBonus = 1;
@@ -179,10 +232,8 @@ const Blueprints = (()=>{
             rigBonus = 0.958;
 
             // find the blueprint to read its ME
-            let blueprint = blueprints.findIndex(element => element.itemId == job.blueprintId);
-            if (blueprint >= 0) {
-              // console.log(blueprints.data[blueprint])
-              bpME = blueprints[blueprint].materialEfficiency
+            if (blueprints && blueprints.__meByItemId && blueprints.__meByItemId[job.blueprintId] != null) {
+              bpME = blueprints.__meByItemId[job.blueprintId];
             }
 
           } else if (job.activityName == 'Reaction') {
@@ -1464,13 +1515,22 @@ const Blueprints = (()=>{
       });
       
       // reduce runs of blueprints in use
-      bpcs.data.forEach( bpc => {
+      const bpcJobRunsByBlueprintId = {};
+      for (let j = 0; j < alljobs.data.length; j++) {
+        const job = alljobs.data[j];
+        const blueprintId = job.blueprintId;
+        if (blueprintId == null) continue;
+        if (bpcJobRunsByBlueprintId[blueprintId] != null) continue; // keep first match (findIndex semantics)
+        if (job.status === 'active' || job.completedTime > bpcs.lastModified) {
+          bpcJobRunsByBlueprintId[blueprintId] = job.runs;
+        }
+      }
+
+      bpcs.data.forEach(bpc => {
         trace(bpc);
-        let i = alljobs.data.findIndex(j => (j.blueprintId == bpc.itemId && (j.status == 'active' || j.completedTime > bpcs.lastModified)));
-        trace(i);
-        trace(alljobs.data[i]);
-        if (i>=0) bpc.runs -= alljobs.data[i].runs;
-      })
+        const runsInUse = bpcJobRunsByBlueprintId[bpc.itemId];
+        if (runsInUse != null) bpc.runs -= runsInUse;
+      });
 
 
       // store items to sheet BPC table
@@ -1976,6 +2036,17 @@ function runUpdateProject() {
 function runUpdateAllProjects() {
   const _time = (label, fn) => (typeof Perf !== 'undefined' && Perf.time) ? Perf.time(label, fn) : fn();
 
+  const _toEpochMs = (v) => {
+    if (v == null) return null;
+    if (typeof v === 'number') return isNaN(v) ? null : v;
+    if (v instanceof Date) return v.getTime();
+    // Try string/other coercions.
+    const n = Number(v);
+    if (!isNaN(n) && n > 0) return n;
+    const t = Date.parse(String(v));
+    return isNaN(t) ? null : t;
+  };
+
   // Ensure per-execution caches start clean (Apps Script runtime may be warm).
   if (typeof Corporation !== 'undefined' && Corporation.resetMemo) {
     Corporation.resetMemo();
@@ -2013,6 +2084,12 @@ function runUpdateAllProjects() {
   _time('runUpdateAllProjects', () => {
     const ss = SpreadsheetApp.getActive();
 
+    // Open sidebar immediately so cache warm-up steps are visible.
+    if (typeof Sidebar !== 'undefined' && Sidebar.open) {
+      Sidebar.open('');
+      Sidebar.add('Načítám cache...');
+    }
+
     // Freeze memo caches for the duration of this run.
     // This prevents short ESI cache lifetimes (e.g. jobs ~5 min) from forcing
     // mid-run refreshes when updating multiple projects.
@@ -2023,9 +2100,19 @@ function runUpdateAllProjects() {
     try {
       // Warm caches once (may trigger a single sync if expired).
       if (typeof Corporation !== 'undefined') {
-        if (Corporation.loadAssets) _time('warm cache: assets', () => Corporation.loadAssets());
-        if (Corporation.loadJobs) _time('warm cache: jobs', () => Corporation.loadJobs());
-        if (Corporation.loadBlueprints) _time('warm cache: blueprints', () => Corporation.loadBlueprints());
+        const warmed = {};
+        if (Corporation.loadAssets) warmed.assets = _time('warm cache: assets', () => Corporation.loadAssets());
+        if (Corporation.loadJobs) warmed.jobs = _time('warm cache: jobs', () => Corporation.loadJobs());
+        if (Corporation.loadBlueprints) warmed.blueprints = _time('warm cache: blueprints', () => Corporation.loadBlueprints());
+
+        // Publish cache expiry info for the sidebar footer.
+        if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
+          Sidebar.setCacheInfo({
+            assetsExpiresMs: _toEpochMs(warmed.assets && warmed.assets.expires),
+            jobsExpiresMs: _toEpochMs(warmed.jobs && warmed.jobs.expires),
+            blueprintsExpiresMs: _toEpochMs(warmed.blueprints && warmed.blueprints.expires),
+          });
+        }
       }
 
       const names = [

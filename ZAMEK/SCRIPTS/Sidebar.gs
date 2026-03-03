@@ -2,18 +2,37 @@
  * Sidebar object
  */ 
 const Sidebar = (()=>{
+  const userProperties = PropertiesService.getUserProperties();
+  let itemsCache = null;
+  let cacheInfoCache = null;
+  let dirty = false;
+  let lastFlushMs = 0;
+  let uiShown = false;
+
+  const flushIfDirty = (force = false) => {
+    if (!dirty || !itemsCache) return;
+    const now = Date.now();
+    if (!force && (now - lastFlushMs) < 900) return;
+    userProperties.setProperty("sidebarItems", JSON.stringify(itemsCache));
+    dirty = false;
+    lastFlushMs = now;
+  };
   return {
     /*
      * Initializes and opens a new sidebar in active sheet
      */
     open: function(status) {
       this.clean();
-      this.setHeader(status?status:'Status');
+      // Keep dynamic project name in the header property (shown in the footer in HTML).
+      this.setHeader(status ? status : '');
+
+      if (uiShown) return;
 
       var htmlOutput = HtmlService
         .createHtmlOutputFromFile('Sidebar-html')
-        .setTitle(status?status:'Status');
+        .setTitle('Aktualizace Projektu');
       SpreadsheetApp.getUi().showSidebar(htmlOutput);
+      uiShown = true;
     },
 
     /*
@@ -23,7 +42,6 @@ const Sidebar = (()=>{
       /*
       items = logSheet.getRange(1,1).setValue(header);
       */
-      var userProperties = PropertiesService.getUserProperties();
       userProperties.setProperty("sidebarHeader", header);
     },
 
@@ -35,10 +53,31 @@ const Sidebar = (()=>{
       let len = logSheet.getLastRow();
       items = logSheet.getRange(2,1,len - 1,1).setValue('');
       */
-      var userProperties = PropertiesService.getUserProperties();
+      itemsCache = [];
+      cacheInfoCache = null;
+      dirty = false;
+      lastFlushMs = 0;
       userProperties.setProperty("sidebarHeader", '');
       userProperties.setProperty("sidebarItems",'[]');
       userProperties.setProperty("close", '0');
+    },
+
+    /*
+     * Stores cache timing info to be shown in the sidebar footer.
+     * Expected keys: assetsExpiresMs, jobsExpiresMs, blueprintsExpiresMs (all epoch ms).
+     */
+    setCacheInfo: function(partial) {
+      if (!partial) return;
+      if (!cacheInfoCache) {
+        try {
+          cacheInfoCache = JSON.parse(userProperties.getProperty('sidebarCacheInfo') || '{}') || {};
+        } catch (e) {
+          cacheInfoCache = {};
+        }
+      }
+
+      cacheInfoCache = Object.assign({}, cacheInfoCache, partial, { updatedAtMs: Date.now() });
+      userProperties.setProperty('sidebarCacheInfo', JSON.stringify(cacheInfoCache));
     },
 
     /*
@@ -48,20 +87,30 @@ const Sidebar = (()=>{
       /*
       logSheet.appendRow([message]);
       */
-      var userProperties = PropertiesService.getUserProperties();
-      let items = userProperties.getProperty("sidebarItems");
-      console.log(items);
-      let json = JSON.parse(items);
-      json.push(message);
-      userProperties.setProperty("sidebarItems", JSON.stringify(json));
+      if (!itemsCache) {
+        const items = userProperties.getProperty("sidebarItems") || '[]';
+        try {
+          itemsCache = JSON.parse(items);
+        } catch (e) {
+          itemsCache = [];
+        }
+      }
+      itemsCache.push(message);
+      dirty = true;
+      flushIfDirty(false);
+    },
+
+    flush: function() {
+      flushIfDirty(true);
     },
 
     /*
      * closes the sidebar
      */
     close: function() {
-      var userProperties = PropertiesService.getUserProperties();
+      flushIfDirty(true);
       userProperties.setProperty("close", '1');
+      uiShown = false;
     },
 
     getData: function() {
@@ -76,11 +125,29 @@ const Sidebar = (()=>{
         items: items
       }
       */
-      var userProperties = PropertiesService.getUserProperties();
+      const safeParseItems = () => {
+        const raw = userProperties.getProperty('sidebarItems');
+        if (!raw) return [];
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+          // Heal corrupted property to avoid repeated crashes.
+          userProperties.setProperty('sidebarItems', '[]');
+          return [];
+        }
+      };
+
       return {
         heading: userProperties.getProperty("sidebarHeader"),
-//        heading: 'hey ' + Date.now() + userProperties.getProperty("sidebarHeader"),
-        items: JSON.parse(userProperties.getProperty("sidebarItems")),
+        items: safeParseItems(),
+        cacheInfo: (() => {
+          try {
+            return JSON.parse(userProperties.getProperty('sidebarCacheInfo') || '{}') || {};
+          } catch (e) {
+            return {};
+          }
+        })(),
         close: userProperties.getProperty("close")
       }
 
