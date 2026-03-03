@@ -17,6 +17,13 @@ const Blueprints = (()=>{
   const colLock = 11   // zloupec zamku produkce
   const rowLock = 8    // radka zamku
 
+  const _TRACE = PropertiesService.getScriptProperties().getProperty('DEBUG_TRACE') === '1';
+  const trace = (...args) => {
+    if (!_TRACE) return;
+    // eslint-disable-next-line no-console
+    console.log(...args);
+  };
+
   /* 
   * Overi, jestli je povolene z aktivniho sheetu spoustet blueprint funkce
   */
@@ -60,7 +67,7 @@ const Blueprints = (()=>{
     // najdi doktrynu s danym nazvem
     var col = 0;
     while (col < lastCol) {
-      console.log (doctrines[0][col]);
+      trace(doctrines[0][col]);
       if (doctrines[0][col] == name) break;
       col ++;
     }
@@ -76,7 +83,7 @@ const Blueprints = (()=>{
     for (let row = 1; row < 39; row++) {
       let item = doctrines[row][col];
       item = item.trim();
-      console.log(item);
+      trace(item);
       if (item) {
         // zsjisti a zapis ID blueptintu
         var blueprintTypeId = getBlueprintId (item);
@@ -132,7 +139,7 @@ const Blueprints = (()=>{
             runs *= job.licensedRuns;
           }
 
-          console.log("Finished " + job.activityName + " " + runs + " runs of " + job.productName + " from " + job.blueprintName + " in batch of " + batchSize + " items");
+          trace("Finished " + job.activityName + " " + runs + " runs of " + job.productName + " from " + job.blueprintName + " in batch of " + batchSize + " items");
           ret.push([job.productName, runs * batchSize])
       }
     })
@@ -182,21 +189,21 @@ const Blueprints = (()=>{
             rigBonus = 0.974;
           }
 
-          console.log("Started " + job.activityName + " " + job.runs + " runs of " + job.productName + " from " + job.blueprintName + " id " + job.blueprintId + " ME " + bpME + " material " + materials + " advanced " + isAdvanced);
+          trace("Started " + job.activityName + " " + job.runs + " runs of " + job.productName + " from " + job.blueprintName + " id " + job.blueprintId + " ME " + bpME + " material " + materials + " advanced " + isAdvanced);
 
           materialsJSON = JSON.parse(materials);
           materialsJSON.forEach(material => {
   //          console.log("base quantity " + material.base_quantity + " roleBonus " + roleBonus + " rigBonus " + rigBonus + " bpME " + bpME)
             if (material.base_quantity) {
               let amount = Math.ceil(material.base_quantity * job.runs * roleBonus * rigBonus * (1.0 - bpME / 100.0));
-              console.log("loc: " + job.outputLocationId + " material " + material.type + " amount " + amount)
+              trace("loc: " + job.outputLocationId + " material " + material.type + " amount " + amount)
 
               let pos = ret.findIndex(i => i[0] == material.type && i[2] == job.outputLocationId && i[3] == isAdvanced && i[4] == job.activityName);
               if (pos > 0) {
-                console.log('updating at pos ' + pos)
+                trace('updating at pos ' + pos)
                 ret[pos][1] -= amount;
               } else {
-                console.log('inserting ...')
+                trace('inserting ...')
                 ret.push([material.type, amount * (-1), job.outputLocationId, isAdvanced, job.activityName])
               }
             }
@@ -413,6 +420,17 @@ const Blueprints = (()=>{
       // initiate arrays
       var plannedJobs = sheet.getRange(firstDataRow, 1, maxJobs, 22).getValues();
       var inputMaterials = sheet.getRange(firstDataRow, colInput, maxJobs, 21).getValues();
+
+      const plannedCount = (() => {
+        let n = 0;
+        while (n < plannedJobs.length && plannedJobs[n][0]) n++;
+        return n;
+      })();
+      const inputCount = (() => {
+        let n = 0;
+        while (n < inputMaterials.length && inputMaterials[n][0]) n++;
+        return n;
+      })();
 //      var manufactureMaterials = sheet.getRange(firstDataRow, colManuf, maxJobs, 2).getValues();
 //      var reactionMaterials = sheet.getRange(firstDataRow, colReact, maxJobs, 2).getValues();
 //      var interimMaterials = sheet.getRange(firstDataRow, colManufBuffer, maxJobs, 2).getValues();                      // asi rozsirit na dalsi hangar
@@ -449,9 +467,6 @@ const Blueprints = (()=>{
           var plannedJob = plannedJobs.findIndex(element => element[1] == job[3] && element[3] == job[2]);
           if (plannedJob >= 0) {
             // found!
-            range = sheet.getRange(firstDataRow + plannedJob, colJobs, 1, 1);
-    //        let quantity = range.getValue()
-    //        range.setValue(job[1] * plannedJobs[plannedJob][8] + quantity);
             if (job[2] == "Copying") {
               // for copying activity count total BPC runs being produced: copies (runs) * licensedRuns
               plannedJobs[plannedJob][11] = (Number(job[1]) * Number(job[4])) + Number(plannedJobs[plannedJob][11]);
@@ -463,10 +478,15 @@ const Blueprints = (()=>{
               // for other activities calculate number of output items
               plannedJobs[plannedJob][11] = job[1] * plannedJobs[plannedJob][8] + Number(plannedJobs[plannedJob][11]);
             }
-            range.setValue(plannedJobs[plannedJob][11]);
           }
         }
       })
+
+      // write in-progress counts (column "Ve výrobě") in one batch
+      if (plannedCount > 0) {
+        const inProgressValues = plannedJobs.slice(0, plannedCount).map(r => [Number(r[11]) || 0]);
+        sheet.getRange(firstDataRow, colJobs, plannedCount, 1).setValues(inProgressValues);
+      }
 
       /*
        * Calculate how much material is needed for each job
@@ -511,7 +531,7 @@ const Blueprints = (()=>{
         */
         let required = plannedJobs[i][12];
 
-        console.log(">>> Product [" + i + "]: " + product + " action " + action + " Total: " + total + " batchSize: " + batchSize + " required: " + required + " inprogress: " + inprogress + " ready: " + ready);
+        trace(">>> Product [" + i + "]: " + product + " action " + action + " Total: " + total + " batchSize: " + batchSize + " required: " + required + " inprogress: " + inprogress + " ready: " + ready);
 
         if (materials) {
           // job has input materials
@@ -534,7 +554,7 @@ const Blueprints = (()=>{
           if (todo > 0) {
             // find every material in job queue or input hangar
             materials.forEach(material => {
-              console.log("::: Material: " + material.type + " quantity: " + material.quantity);
+              trace("::: Material: " + material.type + " quantity: " + material.quantity);
 
               let pos = plannedJobs.findIndex(element => element[0] == material.type);
               if (pos >= 0) {
@@ -546,9 +566,9 @@ const Blueprints = (()=>{
                   
                 } else if (plannedJobs[pos][3] == "Invention") {
                   // BPC Invention activity, calculate needed items and deduct running T2 BPCs from available BPCs
-                  console.log ("Invention [" + pos + "] " + plannedJobs[pos][0] + " in progress " + plannedJobs[pos][11] + " on stock " + plannedJobs[pos][13]);
-                  console.log ("- manuf in progress " + inprogress + " ready " + ready + " required " + required);
-                  console.log ("- material.quantity " + material.quantity + " todo " + todo + " total " + total);
+                  trace("Invention [" + pos + "] " + plannedJobs[pos][0] + " in progress " + plannedJobs[pos][11] + " on stock " + plannedJobs[pos][13]);
+                  trace("- manuf in progress " + inprogress + " ready " + ready + " required " + required);
+                  trace("- material.quantity " + material.quantity + " todo " + todo + " total " + total);
                   plannedJobs[pos][12] += Math.ceil(material.quantity * todo / total);
 
                 } else {
@@ -598,26 +618,31 @@ const Blueprints = (()=>{
       // update the planned job status and run cost
       i = 0;
       let bpos = Corporation.loadBPOs();                // load BPOs from cache
-      let allJobs = Corporation.getJobsCached();    // load all corporation jobs in all hangars
+      let allJobs = Corporation.getJobsCached();        // load all corporation jobs in all hangars
       let allRunningJobs = allJobs.data.filter(item => item.status == 'active');   // filter only running jobs
-      console.log(allRunningJobs)
+      trace(allRunningJobs);
 
-      do {
-        let product = plannedJobs[i][0];
-        let blueprint = plannedJobs[i][1];
-        let action = plannedJobs[i][3];
-        let runs = plannedJobs[i][4];
-        let materials = JSON.parse(plannedJobs[i][7]);
-        let isAdvanced = plannedJobs[i][9];
-        let inprogress = plannedJobs[i][11];
-        let required = plannedJobs[i][12];
-        let ready = plannedJobs[i][13];
+      const statusValues = Array.from({ length: plannedCount }, () => ['']);
+      const requiredValues = Array.from({ length: plannedCount }, () => [0]);
+      const runCostValues = Array.from({ length: plannedCount }, () => [0]);
+      const runCostNoteValues = Array.from({ length: plannedCount }, () => ['']);
+
+      for (let row = 0; row < plannedCount; row++) {
+        let product = plannedJobs[row][0];
+        let blueprint = plannedJobs[row][1];
+        let action = plannedJobs[row][3];
+        let runs = plannedJobs[row][4];
+        let materials = JSON.parse(plannedJobs[row][7]);
+        let isAdvanced = plannedJobs[row][9];
+        let inprogress = plannedJobs[row][11];
+        let required = plannedJobs[row][12];
+        let ready = plannedJobs[row][13];
 
         // update job status
         if (ready >= required) {
-          sheet.getRange(firstDataRow + i, 11, 1, 1).setValue('Hotovo')
+          statusValues[row][0] = 'Hotovo';
         } else if (ready + inprogress >= required) {
-          sheet.getRange(firstDataRow + i, 11, 1, 1).setValue('Běží')
+          statusValues[row][0] = 'Běží';
         } else {
           // find if all required inputs are in right hangar
           let canStart = true;
@@ -667,28 +692,6 @@ const Blueprints = (()=>{
                 if (sourceHangarAlt) materialVolume += jobRecord[14 + sourceHangarAlt];
               }
 
-
-
-/*
-              // find material in hangar
-              let hangarRecord = null;
-              let hangarRecordInterim = null;
-              let materialVolume = 0;
-
-              if (action =='Reaction') {
-                hangarRecord = reactionMaterials.find(element => element[0] == material.type);
-              } else {
-                hangarRecord = manufactureMaterials.find(element => element[0] == material.type)
-                hangarRecordInterim = interimMaterials.find(element => element[0] == material.type)
-              }
-
-              if (hangarRecord) {
-                materialVolume = hangarRecord[1];
-              }
-              if (hangarRecordInterim) {
-                materialVolume += hangarRecordInterim[1];
-              }
-*/
               // material quantity for one run must be less than material available in hangar to start job
               if ((material.quantity / runs) > materialVolume) {
                 log = log + "\n" + material.type + " " + (material.quantity / runs - materialVolume)
@@ -701,18 +704,17 @@ const Blueprints = (()=>{
           if (action == "Copying" && canStart) {
             // find BPO
             let jobBPOs = bpos.filter(item => item.blueprint == blueprint);
-            console.log(jobBPOs);
+            trace(jobBPOs);
 
             // find running job for every BPO
             let jobBPOsRunning = jobBPOs.map(a => ({
               itemId : a.blueprintId,
               job: allRunningJobs.find(item => item.blueprintId == a.blueprintId)
             }));
-
-            console.log(jobBPOsRunning)
+            trace(jobBPOsRunning)
 
             let jobFreeBPOs = jobBPOsRunning.filter(item => item.job == null);
-            console.log(jobFreeBPOs);
+            trace(jobFreeBPOs);
 
             if (jobFreeBPOs.length == 0) {
               canStart = false;
@@ -721,96 +723,70 @@ const Blueprints = (()=>{
 
           }
 
-          if (canStart)
-            sheet.getRange(firstDataRow + i, 11, 1, 1).setValue('Připraveno')
-          else {
-            sheet.getRange(firstDataRow + i, 11, 1, 1).setValue('Čeká')
-            sheet.getRange(firstDataRow + i, colRunCost + 1, 1, 1).setValue(log);
+          if (canStart) {
+            statusValues[row][0] = 'Připraveno';
+          } else {
+            statusValues[row][0] = 'Čeká';
+            runCostNoteValues[row][0] = log;
           }
         }
 
-        // update required products amount
-        sheet.getRange(firstDataRow + i, 13, 1, 1).setValue(required)
-
+        requiredValues[row][0] = required;
 
         // Update job run cost
         let runcost = 0;
 
         if (action == 'Manufacturing') {
-          // calculate base input material cost * required runs
           if (!materials) throw ("Výroba " + product + "nemá definovaný materiál");
 
-          // calculate Estimated item value as SUM (all materials with base quantity) Material base quantity x job runs × Material adjusted price 
-          // (blueprints must not be included)
           materials.forEach(material => {
             if (!material.type.endsWith("Blueprint")) {
-              // get adjusted material price
               let price = priceList.getPrice(material.type);
               if (!price) throw ("Nenalezena cena za materiál: " + material.type);
-              // calculate 
               runcost = runcost + material.base_quantity * runs * price.eveAdjusted;
-              console.log("Estimated item value: " + runcost)
             }
           })
 
-          // apply Manufacturing: System cost Index
           runcost = runcost * manufacturingSystemCost;
-
-          // apply Manufacturing: Tax+Struct. bonus
           runcost = runcost + runcost * manufacturingBonus;
 
         } else if (action == 'Reaction') {
-          // calculate base input material cost * required runs
           if (!materials) throw ("Reakce " + product + "nemá definovaný materiál");
 
-          // calculate Estimated item value as SUM (all materials) Material base quantity x job runs × Material adjusted price 
           materials.forEach(material => {
-            // get adjusted material price
             let price = priceList.getPrice(material.type);
             if (!price) throw ("Nenalezena cena za materiál: " + material.type);
-            // calculate 
             runcost = runcost + material.base_quantity * runs * price.eveAdjusted;
-            console.log("Estimated item value: " + runcost)
           })
 
-          // apply Manufacturing: System cost Index
           runcost = runcost * reactionSystemCost;
-
-          // apply Manufacturing: Tax+Struct. bonus
           runcost = runcost + runcost * reactionBonus;
 
         } else if (action == 'Invention') {
-
-          // calculate Estimated item value as Final product adjusted price
           let finalProduct = product.substring(0, product.length - 10);
           let price = priceList.getPrice(finalProduct);
           if (!price) throw ("Nenalezena cena za materiál: " + finalProduct);
           runcost = runs * price.eveAdjusted * 0.02;
 
-          // apply Invention: System cost Index
           runcost = runcost * inventionSystemCost;
-
-          // apply Invention: Tax+Struct. bonus
           runcost = runcost + runcost * inventionBonus;
         }
 
-        // update job runcost
-        sheet.getRange(firstDataRow + i, colRunCost, 1, 1).setValue(runcost);
+        runCostValues[row][0] = runcost;
+      }
 
-        // move to the next item
-        i++;
-      } while (plannedJobs[i][0]);
+      if (plannedCount > 0) {
+        sheet.getRange(firstDataRow, 11, plannedCount, 1).setValues(statusValues);
+        sheet.getRange(firstDataRow, 13, plannedCount, 1).setValues(requiredValues);
+        sheet.getRange(firstDataRow, colRunCost, plannedCount, 1).setValues(runCostValues);
+        sheet.getRange(firstDataRow, colRunCost + 1, plannedCount, 1).setValues(runCostNoteValues);
+      }
 
-      // update the input material requied amount
-      i = 0;
-      do {
-        // update required products amount and status color
-        let field = sheet.getRange(firstDataRow + i, colInput + 9, 1, 6);
-        field.setValues([[inputMaterials[i][9], inputMaterials[i][10], inputMaterials[i][11], inputMaterials[i][12], inputMaterials[i][13], inputMaterials[i][14]]]);
-
-        // move to the next item
-        i++;
-      } while (inputMaterials[i][0]);
+      // update the input material requied amount in one batch
+      if (inputCount > 0) {
+        const inputRequiredValues = inputMaterials.slice(0, inputCount).map(r => [r[9], r[10], r[11], r[12], r[13], r[14]]);
+        sheet.getRange(firstDataRow, colInput + 9, inputCount, 6).setValues(inputRequiredValues);
+      }
 
 
       // show result in notification window
@@ -951,7 +927,7 @@ const Blueprints = (()=>{
         var hangarResB = hangarsTemp.filter(function (e) {return e; });
         hangars = hangars.concat(hangarResB)
       }
-      console.log(hangars)
+      trace(hangars)
 
       /* 
       * Update hangars 
@@ -1029,15 +1005,15 @@ const Blueprints = (()=>{
       let newJobs = jobs.data.filter(job => job.startTime > items.lastModified);
       let blueprintsAll = _time(_sheetName + ' all blueprints', () => Corporation.getBlueprintsCached());
       var newJobMaterials = _time(_sheetName + ' materials for new jobs', () => getMaterialsForNewJobs(plannedJobs, newJobs, blueprintsAll.data))
-      console.log (newJobMaterials);
+      trace(newJobMaterials);
 
       // prepare data for jobs delivered after hangars were updated
       // all jobs, even those completed
       var alljobs = _time(_sheetName + ' corp jobs (all)', () => Corporation.getJobsCached(hangars, true));
       // filter all jobs delivered after the corporate items cache update
       let deliveredJobs = alljobs.data.filter(job => job.status == 'delivered' && job.completedTime > items.lastModified);
-      console.log('deliveredJobs');
-      console.log(deliveredJobs);
+      trace('deliveredJobs');
+      trace(deliveredJobs);
 
 
 
@@ -1072,7 +1048,7 @@ const Blueprints = (()=>{
           // store items in hangar to sheet hangar table
           var rows = itemsM.map(a => [a.typeName, a.quantity]);
           range = sheet.getRange(firstDataRow, colManuf, rows.length, 2);
-          range.setValues(rows);
+          _time(_sheetName + ' write manuf hangar (corp)', () => range.setValues(rows));
         }
       }
       // filter items for personal manufacturing hangar
@@ -1085,7 +1061,7 @@ const Blueprints = (()=>{
           // store items in hangar to sheet hangar table
           var rows = itemsM.map(a => [a.type_name, a.quantity]);
           range = sheet.getRange(firstDataRow + corpItems, colManuf, rows.length, 2);
-          range.setValues(rows);
+          _time(_sheetName + ' write manuf hangar (personal)', () => range.setValues(rows));
         }
       }
       // add job products delivered after corporate items cache updated
@@ -1096,9 +1072,9 @@ const Blueprints = (()=>{
       }
 
       if (finishedItems.length > 0) {
-        console.log(finishedItems);
+        trace(finishedItems);
         range = sheet.getRange(firstDataRow + corpItems + persItems + 1, colManuf, finishedItems.length, 2);
-        range.setValues(finishedItems);
+        _time(_sheetName + ' write manuf finished', () => range.setValues(finishedItems));
       }
       // deduct material usage from new jobs started after items cache updated
       let deductedItems;
@@ -1116,11 +1092,11 @@ const Blueprints = (()=>{
         })
       }
       if (deductedItems.length > 0) {
-        console.log(deductedItems);
+        trace(deductedItems);
         deductedItemsShort = deductedItems.map(i => ([i[0], i[1]]));
-        console.log(deductedItemsShort)
+        trace(deductedItemsShort)
         range = sheet.getRange(firstDataRow + corpItems + persItems + finishedItems.length + 2, colManuf, deductedItems.length, 2);
-        range.setValues(deductedItemsShort);
+        _time(_sheetName + ' write manuf deducted', () => range.setValues(deductedItemsShort));
       }
 
 
@@ -1143,7 +1119,7 @@ const Blueprints = (()=>{
           // store items in hangar to sheet hangar table
           var rows = itemsR.map(a => [a.typeName, a.quantity]);
           range = sheet.getRange(firstDataRow, colReact, rows.length, 2);
-          range.setValues(rows);
+          _time(_sheetName + ' write react hangar (corp)', () => range.setValues(rows));
         }
       }
       // filter items for personal reaction hangar
@@ -1156,15 +1132,15 @@ const Blueprints = (()=>{
           // store items in hangar to sheet hangar table
           var rows = itemsR.map(a => [a.type_name, a.quantity]);
           range = sheet.getRange(firstDataRow + corpItems, colReact, rows.length, 2);
-          range.setValues(rows);
+          _time(_sheetName + ' write react hangar (personal)', () => range.setValues(rows));
         }
       }
       // add job products delivered after corporate items cache updated
       finishedItems = getFinishedJobProducts  (plannedJobs, deliveredJobs, hangarR.locationID);
       if (finishedItems.length > 0) {
-        console.log(finishedItems);
+        trace(finishedItems);
         range = sheet.getRange(firstDataRow + corpItems + persItems + 1, colReact, finishedItems.length, 2);
-        range.setValues(finishedItems);
+        _time(_sheetName + ' write react finished', () => range.setValues(finishedItems));
       }
       // deduct material usage from new jobs started after items cache updated
       if (useBufferHangar) {
@@ -1175,11 +1151,11 @@ const Blueprints = (()=>{
         deductedItems = newJobMaterials.filter(i => i[2] == hangarR.locationID && i[4] == 'Reaction')
       }
       if (deductedItems.length > 0) {
-        console.log(deductedItems);
+        trace(deductedItems);
         deductedItemsShort = deductedItems.map(i => ([i[0], i[1]]));
-        console.log(deductedItemsShort)
+        trace(deductedItemsShort)
         range = sheet.getRange(firstDataRow + corpItems + persItems + finishedItems.length + 2, colReact, deductedItems.length, 2);
-        range.setValues(deductedItemsShort);
+        _time(_sheetName + ' write react deducted', () => range.setValues(deductedItemsShort));
       }
 
 
@@ -1202,7 +1178,7 @@ const Blueprints = (()=>{
           // store items in hangar to sheet hangar table
           var rows = itemsI.map(a => [a.typeName, a.quantity]);
           range = sheet.getRange(firstDataRow, colManufBuffer, rows.length, 2);
-          range.setValues(rows);
+          _time(_sheetName + ' write manuf buffer (corp)', () => range.setValues(rows));
         }
       }
       // filter items for personal reaction hangar
@@ -1215,16 +1191,16 @@ const Blueprints = (()=>{
           // store items in hangar to sheet hangar table
           var rows = itemsI.map(a => [a.type_name, a.quantity]);
           range = sheet.getRange(firstDataRow + corpItems, colManufBuffer, rows.length, 2);
-          range.setValues(rows);
+          _time(_sheetName + ' write manuf buffer (personal)', () => range.setValues(rows));
         }
       }
       // add job products delivered after corporate items cache updated
       if (hangarMB) {
       finishedItems = getFinishedJobProducts  (plannedJobs, deliveredJobs, hangarMB.locationID);
         if (finishedItems.length > 0) {
-          console.log(finishedItems);
+          trace(finishedItems);
           range = sheet.getRange(firstDataRow + corpItems + persItems + 1, colManufBuffer, finishedItems.length, 2);
-          range.setValues(finishedItems);
+          _time(_sheetName + ' write manuf buffer finished', () => range.setValues(finishedItems));
         }
         // deduct material usage from new jobs started after items cache updated
         if (useBufferHangar) {
@@ -1238,11 +1214,11 @@ const Blueprints = (()=>{
           deductedItems = []
         }
         if (deductedItems.length > 0) {
-          console.log(deductedItems);
+          trace(deductedItems);
           deductedItemsShort = deductedItems.map(i => ([i[0], i[1]]));
-          console.log(deductedItemsShort)
+          trace(deductedItemsShort)
           range = sheet.getRange(firstDataRow + corpItems + persItems + finishedItems.length + 2, colManufBuffer, deductedItems.length, 2);
-          range.setValues(deductedItemsShort);
+          _time(_sheetName + ' write manuf buffer deducted', () => range.setValues(deductedItemsShort));
         }
       }
 
@@ -1267,16 +1243,16 @@ const Blueprints = (()=>{
           // store items in hangar to sheet hangar table
           var rows = itemsI.map(a => [a.typeName, a.quantity]);
           range = sheet.getRange(firstDataRow, colReactBuffer, rows.length, 2);
-          range.setValues(rows);
+          _time(_sheetName + ' write react buffer (corp)', () => range.setValues(rows));
         }
       }
       if (hangarRB) {
         // add job products delivered after corporate items cache updated
         finishedItems = getFinishedJobProducts  (plannedJobs, deliveredJobs, hangarRB.locationID);
         if (finishedItems.length > 0) {
-          console.log(finishedItems);
+          trace(finishedItems);
           range = sheet.getRange(firstDataRow + corpItems + persItems + 1, colReactBuffer, finishedItems.length, 2);
-          range.setValues(finishedItems);
+          _time(_sheetName + ' write react buffer finished', () => range.setValues(finishedItems));
         }
         // deduct material usage from new jobs started after items cache updated
         if (useBufferHangar) {
@@ -1287,11 +1263,11 @@ const Blueprints = (()=>{
           deductedItems = []
         }
         if (deductedItems.length > 0) {
-          console.log(deductedItems);
+          trace(deductedItems);
           deductedItemsShort = deductedItems.map(i => ([i[0], i[1]]));
-          console.log(deductedItemsShort)
+          trace(deductedItemsShort)
           range = sheet.getRange(firstDataRow + corpItems + persItems + finishedItems.length + 2, colReactBuffer, deductedItems.length, 2);
-          range.setValues(deductedItemsShort);
+          _time(_sheetName + ' write react buffer deducted', () => range.setValues(deductedItemsShort));
         }
       }
 
@@ -1316,15 +1292,15 @@ const Blueprints = (()=>{
           // store items in hangar to sheet hangar table
           var rows = itemsRes.map(a => [a.typeName, a.quantity]);
           range = sheet.getRange(firstDataRow, colResearch, rows.length, 2);
-          range.setValues(rows);
+          _time(_sheetName + ' write research hangar (corp)', () => range.setValues(rows));
         }
       }
       // add job products delivered after corporate items cache updated
       finishedItems = getFinishedJobProducts  (plannedJobs, deliveredJobs, hangarRes.locationID);
       if (finishedItems.length > 0) {
-        console.log(finishedItems);
+        trace(finishedItems);
         range = sheet.getRange(firstDataRow + corpItems + persItems + 1, colResearch, finishedItems.length, 2);
-        range.setValues(finishedItems);
+        _time(_sheetName + ' write research finished', () => range.setValues(finishedItems));
       }
 
 
@@ -1356,7 +1332,7 @@ const Blueprints = (()=>{
           // store items in hangar to sheet hangar table
           var rows = itemsRes.map(a => [a.typeName, a.quantity]);
           range = sheet.getRange(firstDataRow, colResearchBuffer, rows.length, 2);
-          range.setValues(rows);
+          _time(_sheetName + ' write research buffer (corp)', () => range.setValues(rows));
         }
       }
       /*
@@ -1369,18 +1345,18 @@ const Blueprints = (()=>{
         finishedItems = []
         hangarResB.forEach(hangar => finishedItems = finishedItems.concat(getFinishedJobProducts  (plannedJobs, deliveredJobs, hangar.locationID)))
         if (finishedItems.length > 0) {
-          console.log(finishedItems);
+          trace(finishedItems);
           range = sheet.getRange(firstDataRow + corpItems + persItems + 1, colResearchBuffer, finishedItems.length, 2);
-          range.setValues(finishedItems);
+          _time(_sheetName + ' write research buffer finished', () => range.setValues(finishedItems));
         }
         // deduct material usage from new jobs started after items cache updated
         deductedItems = newJobMaterials.filter(i => (i[4] == 'Copying' || i[4] == 'Invention'))
         if (deductedItems.length > 0) {
-          console.log(deductedItems);
+          trace(deductedItems);
           deductedItemsShort = deductedItems.map(i => ([i[0], i[1]]));
-          console.log(deductedItemsShort)
+          trace(deductedItemsShort)
           range = sheet.getRange(firstDataRow + corpItems + persItems + finishedItems.length + 2, colResearchBuffer, deductedItems.length, 2);
-          range.setValues(deductedItemsShort);
+          _time(_sheetName + ' write research buffer deducted', () => range.setValues(deductedItemsShort));
         }
       }
 
@@ -1397,10 +1373,10 @@ const Blueprints = (()=>{
       
       // reduce runs of blueprints in use
       bpcs.data.forEach( bpc => {
-        console.log(bpc);
+        trace(bpc);
         let i = alljobs.data.findIndex(j => (j.blueprintId == bpc.itemId && (j.status == 'active' || j.completedTime > bpcs.lastModified)));
-        console.log (i);
-        console.log(alljobs.data[i]);
+        trace(i);
+        trace(alljobs.data[i]);
         if (i>=0) bpc.runs -= alljobs.data[i].runs;
       })
 
@@ -1410,7 +1386,7 @@ const Blueprints = (()=>{
         // store items in hangar to sheet hangar table
         var rows = bpcs.data.map(a => [a.typeName, a.runs, 1]);
         range = sheet.getRange(firstDataRow, colBPC, rows.length, 3);
-        range.setValues(rows);
+        _time(_sheetName + ' write BPC table', () => range.setValues(rows));
       }
 
       // add copy and research job products delivered after corporate Blueptint cache updated
@@ -1419,12 +1395,12 @@ const Blueprints = (()=>{
         job.status == 'delivered' &&
         job.completedTime > bpcs.lastModified
       ))
-      console.log(deliveredResearchJobs);
+      trace(deliveredResearchJobs);
       finishedItems = getFinishedJobProducts  (plannedJobs, deliveredResearchJobs);
       if (finishedItems.length > 0) {
-        console.log(finishedItems);
+        trace(finishedItems);
         range = sheet.getRange(firstDataRow + bpcs.data.length + 1, colBPC, finishedItems.length, 2);
-        range.setValues(finishedItems);
+        _time(_sheetName + ' write BPC finished', () => range.setValues(finishedItems));
       }
       /*
       // deduct BPC usage from new jobs started after items cache updated
@@ -1451,7 +1427,7 @@ const Blueprints = (()=>{
         // store items in hangar to sheet hangar table
         var rows = jobsFiltered.map(a => [(a.duration >0) ? Universe.durationToString(a.duration) : "Done", a.runs, a.activityName, a.blueprintName, a.licensedRuns, '', '', a.installerName, a.startDate, a.endDate]);
         range = sheet.getRange(firstDataRow, colJobsList, rows.length, 10);
-        range.setValues(rows);
+        _time(_sheetName + ' write jobs list (corp)', () => range.setValues(rows));
       }
 
       // store personal jobs
@@ -1459,11 +1435,11 @@ const Blueprints = (()=>{
         // store items in hangar to sheet hangar table
         var rows = jobsPersonal.data.map(a => [(a.duration >0) ? Universe.durationToString(a.duration) : "Done", a.runs, a.activity_name, a.blueprint_name]);
         range = sheet.getRange(firstDataRow + corpItems, colJobsList, rows.length, 4);
-        range.setValues(rows);
+        _time(_sheetName + ' write jobs list (personal)', () => range.setValues(rows));
       }
 
       // recalculate project
-      this.recalculateProject(sheet, notify);
+      _time(_sheetName + ' recalculate project', () => this.recalculateProject(sheet, notify));
 
       Sidebar.close();
     },

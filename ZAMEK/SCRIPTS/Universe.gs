@@ -18,11 +18,20 @@ const Universe = (()=>{
   activityMap.set(9, 'Reaction');
   activityMap.set(11, 'Reaction');
 
+  const _TRACE = (() => {
+    try {
+      const v = PropertiesService.getScriptProperties().getProperty('DEBUG_TRACE');
+      return String(v || '') === '1';
+    } catch (e) {
+      return false;
+    }
+  })();
+
   /* Returns initialized category id-name map */
   var getCategoryMap = function() {
     if (!categoryMap) {
       // load categories from spreadsheet
-      Logger.log ('### Loading Categories ...')
+      if (_TRACE) Logger.log('### Loading Categories ...')
       var lastRow = categoriesSheet.getLastRow();
 
       if (lastRow > 1) {
@@ -48,7 +57,7 @@ const Universe = (()=>{
   var getGroupMap = function() {
     if (!groupMap) {
       // load groups from spreadsheet
-      Logger.log ('### Loading Groups ...')
+      if (_TRACE) Logger.log('### Loading Groups ...')
       var lastRow = groupsSheet.getLastRow();
 
       if (lastRow > 1) {
@@ -75,7 +84,7 @@ const Universe = (()=>{
   var getTypeMap = function() {
     if (!typeMap) {
       // load types from spreadsheet
-      Logger.log ('### Loading Types ...')
+      if (_TRACE) Logger.log('### Loading Types ...')
       var lastRow = typesSheet.getLastRow();
 
       if (lastRow > 1) {
@@ -105,7 +114,7 @@ const Universe = (()=>{
   var getCharactersMap = function() {
     if (!charactersMap) {
       // load characters from spreadsheet
-      Logger.log ('### Loading Characters ...')
+      if (_TRACE) Logger.log('### Loading Characters ...')
       var lastRow = charactersSheet.getLastRow();
 
       if (lastRow > 1) {
@@ -135,7 +144,7 @@ const Universe = (()=>{
   var getNamesMap = function() {
     if (!nameMap) {
       // load characters from spreadsheet
-      Logger.log ('### Loading Names ...')
+      if (_TRACE) Logger.log('### Loading Names ...')
       var lastRow = namesSheet.getLastRow();
 
       if (lastRow > 1) {

@@ -50,6 +50,21 @@ const Corporation = (()=>{
   }
 
   var corpProperties = PropertiesService.getScriptProperties();
+
+  const _time = (label, fn) => (typeof Perf !== 'undefined' && Perf.time) ? Perf.time(label, fn) : fn();
+  const _TRACE = (() => {
+    try {
+      const v = corpProperties.getProperty('DEBUG_TRACE');
+      return String(v || '') === '1';
+    } catch (e) {
+      return false;
+    }
+  })();
+  const trace = (...args) => {
+    if (!_TRACE) return;
+    try { Logger.log(args.map(a => String(a)).join(' ')); } catch (e) {}
+    try { console.log(...args); } catch (e) {}
+  };
   var hangarsRMap;  // corporate hangars for reaction jobs
   var hangarsMMap;  // corporate hangars for manufacturing jobs
   var hangarsResMap;  // corporate hangars for research jobs
@@ -62,6 +77,7 @@ const Corporation = (()=>{
     assets: null,
     jobs: null,
     blueprints: null,
+    bpos: null,
   };
 
   // When true, reuse in-memory memo for the rest of the execution,
@@ -73,6 +89,7 @@ const Corporation = (()=>{
     _cacheMemo.assets = null;
     _cacheMemo.jobs = null;
     _cacheMemo.blueprints = null;
+    _cacheMemo.bpos = null;
   }
 
   var _setFreezeMemo = function(on) {
@@ -101,7 +118,7 @@ const Corporation = (()=>{
   var getHangarsRMap = function() {
     if (!hangarsRMap) {
       // load hangars from spreadsheet
-      Logger.log ('### Loading R Hangars ...')
+      trace('### Loading R Hangars ...')
       var lastRow = hangarsSheet.getLastRow();
 
       if (lastRow > 1) {
@@ -127,7 +144,7 @@ const Corporation = (()=>{
   var getHangarsMMap = function() {
     if (!hangarsMMap) {
       // load hangars from spreadsheet
-      Logger.log ('### Loading M Hangars ...')
+      trace('### Loading M Hangars ...')
       var lastRow = hangarsSheet.getLastRow();
 
       if (lastRow > 1) {
@@ -149,7 +166,7 @@ const Corporation = (()=>{
   var getHangarsResMap = function() {
     if (!hangarsResMap) {
       // load hangars from spreadsheet
-      Logger.log ('### Loading Res Hangars ...')
+      trace('### Loading Res Hangars ...')
       var lastRow = hangarsSheet.getLastRow();
 
       if (lastRow > 1) {
@@ -171,7 +188,7 @@ const Corporation = (()=>{
   var getHangarsCapMap = function() {
     if (!hangarsCapMap) {
       // load hangars from spreadsheet
-      Logger.log ('### Loading Cap Hangars ...')
+      trace('### Loading Cap Hangars ...')
       var lastRow = hangarsSheet.getLastRow();
 
       if (lastRow > 1) {
@@ -743,7 +760,7 @@ const Corporation = (()=>{
       // smaz data
       var lastRow = hangarsSheet.getLastRow();
       var range = hangarsSheet.getRange(3, 1, lastRow, 31);
-      range.setValue('');
+      range.clearContent();
 
       var hangar = Corporation.getStructureHangars(Corporation.getManufacturingStructure().structure_id);
       var rows = hangar.map(a => [a.locationId, a.locationType, a.locationFlag, a.hangar, a.container, a.hangar + (a.container ? " - " + a.container : "")]);
@@ -782,14 +799,14 @@ const Corporation = (()=>{
       var lastRow = assetsSheet.getLastRow();
       var range;
       if (lastRow > 1) {
-        range = assetsSheet.getRange(2, 1, lastRow, 12);
-        range.setValue('');
+        range = assetsSheet.getRange(2, 1, lastRow - 1, 12);
+        range.clearContent();
       }
 
       var assets = Corporation.getAssets();
 
       let modified = new Date(assets.lastModified);
-      console.log("Modified " + modified + "(" + assets.lastModified + ")" + " exp " + assets.expires);
+      trace("Modified " + modified + "(" + assets.lastModified + ")" + " exp " + assets.expires);
 
       // log cache date info
       range = assetsSheet.getRange(1, 8, 1, 3);
@@ -808,8 +825,6 @@ const Corporation = (()=>{
      * if data stored in sheet have expoired cache, re-sync sheet
      */ 
     loadAssets: function() {
-      Logger.log ('### Loading corporate assets ...')
-
       if (_cacheMemo.assets && _freezeMemo) {
         return _cacheMemo.assets;
       }
@@ -818,6 +833,8 @@ const Corporation = (()=>{
       if (_cacheMemo.assets && _cacheMemo.assets.expires && (new Date().getTime() <= _cacheMemo.assets.expires)) {
         return _cacheMemo.assets;
       }
+
+      trace('### Loading corporate assets ...')
 
       let date = new Date().getTime()
       var assets = {};
@@ -843,7 +860,7 @@ const Corporation = (()=>{
       var lastRow = assetsSheet.getLastRow();
       if (lastRow > 1) {
         // load assets from sheet from the sheet contents
-        let assetsArray = assetsSheet.getRange(2, 1, lastRow, 7).getValues();
+        let assetsArray = assetsSheet.getRange(2, 1, lastRow - 1, 7).getValues();
 
         assets.data = assetsArray.map (a => ({
           locationId : a[0],
@@ -860,10 +877,10 @@ const Corporation = (()=>{
         _cacheMemo.assets = assets;
         return assets;
 
-      } else {
-        _cacheMemo.assets = [];
-        return [];
       }
+
+      _cacheMemo.assets = assets;
+      return assets;
     },
 
     /*
@@ -875,17 +892,18 @@ const Corporation = (()=>{
       _cacheMemo.jobs = null;
 
       // clean insustry jobs sheet
-      var lastRow = industryJobsSheet.getLastRow();
-      if (lastRow > 1) {
-        range = industryJobsSheet.getRange(2, 1, lastRow - 1, 19);
-        range.setValue('');
-      }
+      _time('syncJobs clear sheet', () => {
+        var lastRow = industryJobsSheet.getLastRow();
+        if (lastRow > 1) {
+          industryJobsSheet.getRange(2, 1, lastRow - 1, 19).clearContent();
+        }
+      });
 
       // get all running jobs
-      var jobs = Corporation.getJobs([], true);
+      var jobs = _time('syncJobs fetch ESI jobs', () => Corporation.getJobs([], true));
 
       let modified = new Date(jobs.lastModified);
-      console.log("Modified " + modified + "(" + jobs.lastModified + ")" + " exp " + jobs.expires);
+      trace("Modified " + modified + "(" + jobs.lastModified + ")" + " exp " + jobs.expires);
 
       // log cache date info
       range = industryJobsSheet.getRange(1, 20, 1, 3);
@@ -913,8 +931,14 @@ const Corporation = (()=>{
         a.licensedRuns,
         a.successfulRuns
         ]);
-      range = industryJobsSheet.getRange(2, 1, rows.length, 19);
-      range.setValues(rows);
+      _time('syncJobs write sheet', () => {
+        range = industryJobsSheet.getRange(2, 1, rows.length, 19);
+        range.setValues(rows);
+      });
+
+      // keep the freshly-synced jobs in memo so callers don't have to re-read the sheet
+      _cacheMemo.jobs = jobs;
+      return jobs;
 
     /*
 
@@ -929,8 +953,6 @@ const Corporation = (()=>{
 
     // loads jobs stored in industry sheet
     loadJobs: function() {
-      Logger.log ('### Loading corporate jobs ...')
-
       if (_cacheMemo.jobs && _freezeMemo) {
         return _cacheMemo.jobs;
       }
@@ -940,6 +962,8 @@ const Corporation = (()=>{
         return _cacheMemo.jobs;
       }
 
+      trace('### Loading corporate jobs ...')
+
       let date = new Date().getTime()
       var jobs = {};
       jobs.data = [];
@@ -947,12 +971,18 @@ const Corporation = (()=>{
       jobs.expires = industryJobsSheet.getRange(1,22,1,1).getValue();
       jobs.age = Math.trunc((date - jobs.lastModified) / 1000);
       jobs.cacheRefresh = Math.trunc((jobs.expires - date) / 1000);
-      console.log(jobs);
+      trace(jobs);
 
       // check if asset cache is expired and refresh it
       if (date > jobs.expires) {
         Sidebar.add("Aktualizuju cache jobů");
-        this.syncJobs();
+        // syncJobs already returns the translated jobs object (and memoizes it)
+        var syncedJobs = _time('syncJobs total', () => this.syncJobs());
+        if (syncedJobs) {
+          return syncedJobs;
+        }
+
+        // Fallback: re-read metadata from sheet (shouldn't normally happen)
         date = new Date().getTime();
         jobs.lastModified = industryJobsSheet.getRange(1,21,1,1).getValue();
         jobs.expires = industryJobsSheet.getRange(1,22,1,1).getValue();
@@ -965,7 +995,7 @@ const Corporation = (()=>{
       var lastRow = industryJobsSheet.getLastRow();
       if (lastRow > 1) {
         // load jobs from sheet from the sheet contents
-        let jobsArray = industryJobsSheet.getRange(2, 1, lastRow, 19).getValues();
+        let jobsArray = industryJobsSheet.getRange(2, 1, lastRow - 1, 19).getValues();
 
         jobs.data = jobsArray.map (a => ({
           activityName : a[0],
@@ -984,7 +1014,6 @@ const Corporation = (()=>{
           productTypeId : a[13],
           locationId : a[14],
           outputLocationId : a[15],
-          outputLocationId : a[15],
           completedDate: a[16],
           licensedRuns: a[17],
           successfulRuns: a[18],
@@ -998,10 +1027,10 @@ const Corporation = (()=>{
         _cacheMemo.jobs = jobs;
         return jobs;
 
-      } else {
-        _cacheMemo.jobs = [];
-        return [];
       }
+
+      _cacheMemo.jobs = jobs;
+      return jobs;
     },
 
 
@@ -1016,14 +1045,14 @@ const Corporation = (()=>{
       var lastRow = blueprintsSheet.getLastRow();
       var range;
       if (lastRow > 1) {
-        range = blueprintsSheet.getRange(2, 1, lastRow, 10);
-        range.setValue('');
+        range = blueprintsSheet.getRange(2, 1, lastRow - 1, 10);
+        range.clearContent();
       }
 
       var blueprints = Corporation.getBlueprints();
 
       let modified = new Date(blueprints.lastModified);
-      console.log("Modified " + modified + "(" + blueprints.lastModified + ")" + " exp " + blueprints.expires);
+      trace("Modified " + modified + "(" + blueprints.lastModified + ")" + " exp " + blueprints.expires);
 
       // log cache date info
       range = blueprintsSheet.getRange(1, 11, 1, 3);
@@ -1040,8 +1069,6 @@ const Corporation = (()=>{
      * if data stored in sheet have expired cache, re-sync sheet
      */ 
     loadBlueprints: function() {
-      Logger.log ('### Loading corporate blueprints ...')
-
       if (_cacheMemo.blueprints && _freezeMemo) {
         return _cacheMemo.blueprints;
       }
@@ -1050,6 +1077,8 @@ const Corporation = (()=>{
       if (_cacheMemo.blueprints && _cacheMemo.blueprints.expires && (new Date().getTime() <= _cacheMemo.blueprints.expires)) {
         return _cacheMemo.blueprints;
       }
+
+      trace('### Loading corporate blueprints ...')
 
       let date = new Date().getTime()
       var blueprints = {};
@@ -1075,7 +1104,7 @@ const Corporation = (()=>{
       var lastRow = blueprintsSheet.getLastRow();
       if (lastRow > 1) {
         // load blueprints from the sheet contents
-        let blueprintsArray = blueprintsSheet.getRange(2, 1, lastRow, 10).getValues();
+        let blueprintsArray = blueprintsSheet.getRange(2, 1, lastRow - 1, 10).getValues();
 
         blueprints.data = blueprintsArray.map (a => ({
           locationId : a[0],
@@ -1098,10 +1127,10 @@ const Corporation = (()=>{
         _cacheMemo.blueprints = blueprints;
         return blueprints;
 
-      } else {
-        _cacheMemo.blueprints = [];
-        return [];
       }
+
+      _cacheMemo.blueprints = blueprints;
+      return blueprints;
     },
 
     // Manual memo reset (useful at the beginning of pipelines)
@@ -1124,7 +1153,7 @@ const Corporation = (()=>{
      * Get assets in hangars from cache
      */ 
     getAssetsCached(hangars) {
-      Logger.log ('### Loading corporate assets from cache ...')
+      trace('### Loading corporate assets from cache ...')
 
       // load corporate assets
       assets = this.loadAssets();
@@ -1147,7 +1176,7 @@ const Corporation = (()=>{
      * delivered 
      */ 
     getJobsCached(hangars, all = false) {
-      Logger.log ('### Loading corporate jobs from cache ...')
+      trace('### Loading corporate jobs from cache ...')
 
       // load corporate jobs
       jobs = this.loadJobs();
@@ -1183,7 +1212,7 @@ const Corporation = (()=>{
      * Get blueprints in hangars from cache
      */ 
     getBlueprintsCached(hangars) {
-      Logger.log ('### Loading corporate blueprints from cache ...')
+      trace('### Loading corporate blueprints from cache ...')
 
       // load corporate blueprints
       blueprints = this.loadBlueprints();
@@ -1206,7 +1235,13 @@ const Corporation = (()=>{
      * delivered 
      */ 
     loadBPOs(hangars, all = false) {
-      Logger.log ('### Loading corporate BPOs ...')
+      // Memoize within this Apps Script execution (also covers freezeMemo pipelines).
+      // Note: empty array is a valid cached value, so we must check against null.
+      if (_cacheMemo.bpos !== null) {
+        return _cacheMemo.bpos;
+      }
+
+      trace('### Loading corporate BPOs ...')
 
       var lastRow = bpoSheet.getLastRow();
 
@@ -1221,9 +1256,12 @@ const Corporation = (()=>{
 
 //        console.log(assets);
 
+        _cacheMemo.bpos = assets;
+
         return assets;
 
       } else {
+        _cacheMemo.bpos = [];
         return [];
       }
 

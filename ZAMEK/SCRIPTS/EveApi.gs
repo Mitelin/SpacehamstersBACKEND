@@ -1,7 +1,9 @@
 /*
  * EVE Rest Api clients
  */ 
-const Eve = (()=>{
+// NOTE: Apps Script merges all .gs files into one global scope.
+// Using `var` + `Eve ||` prevents hard failures if another file already declares `Eve`.
+globalThis.Eve = globalThis.Eve || (()=>{
   const maxInt = 2147483647;
   const eveApi = 'https://esi.evetech.net/latest'  // Eve API URL
   const cookbookApi = 'https://evecookbook.com/api' // Eve Cookbook API URL
@@ -538,6 +540,15 @@ const Eve = (()=>{
      * out: array of corporate jobs
      */
     getCorporateJobs: function(includeCompleted) {
+      const _TRACE = (() => {
+        try {
+          const v = PropertiesService.getScriptProperties().getProperty('DEBUG_TRACE');
+          return String(v || '') === '1';
+        } catch (e) {
+          return false;
+        }
+      })();
+
       // prepare paging
       let page = 1;     // queried page
       let maxPage = 1;  // max pages
@@ -548,38 +559,54 @@ const Eve = (()=>{
       let expires = 0;  // cache expiration date
 
 
-      Logger.log(">>> Eve.getCorporateJobs ()");
+      if (_TRACE) Logger.log(">>> Eve.getCorporateJobs ()");
 
-      do {
-        // Call EVE Api
-        var url = eveApi + '/corporations/' + Corporation.getId() + '/industry/jobs/?datasource=tranquility&include_completed=' + includeCompleted.toString() + '&page=' + page;
-        var response = UrlFetchApp.fetch(url, corp_authorized_options_get());
+      // Call first page to learn paging + headers
+      const options = corp_authorized_options_get();
+      const baseUrl = eveApi + '/corporations/' + Corporation.getId() + '/industry/jobs/?datasource=tranquility&include_completed=' + includeCompleted.toString() + '&page=';
+      var response = UrlFetchApp.fetch(baseUrl + page, options);
 
-        // evaluate response code
-        var code = response.getResponseCode();
-        if (code != 200) { 
-          throw ("Eve.getCorporateJobs() Error: " + code + " " + response.getContentText())
+      // evaluate response code
+      var code = response.getResponseCode();
+      if (code != 200) { 
+        throw ("Eve.getCorporateJobs() Error: " + code + " " + response.getContentText())
+      }
+
+      // parse response to object
+      var json = response.getContentText();
+      var data = JSON.parse(json);
+      res = res.concat(data);
+
+      // get response header
+      let headers = response.getHeaders();
+      maxPage = headers["x-pages"];
+      expires = Date.parse(headers["Expires"]);
+      let date = Date.parse(headers["Date"]);
+      lastModified = Date.parse(headers["Last-Modified"]);
+      if (_TRACE) console.log(">>> Response headers Modified " + lastModified + " date " + date + " expires " + expires + " maxPage " + maxPage);
+      age = (date - lastModified) / 1000;
+      cacheRefresh = (expires - date) / 1000;
+
+      // Fetch remaining pages (if any) in parallel
+      page++;
+      if (maxPage && page <= maxPage) {
+        const requests = [];
+        for (let p = page; p <= maxPage; p++) {
+          requests.push(Object.assign({ url: baseUrl + p }, options));
         }
 
-        // parse response to object
-        var json = response.getContentText();
-        var data = JSON.parse(json);
-      
-        // add partial response to complete response
-        res = res.concat(data);
-
-        // get response header
-        let headers = response.getHeaders();
-        maxPage = headers["x-pages"];
-        expires = Date.parse(headers["Expires"]);
-        let date = Date.parse(headers["Date"]);
-        lastModified = Date.parse(headers["Last-Modified"]);
-        console.log(">>> Response headers Modified " + lastModified + " date " + date + " expires " + expires + " maxPage " + maxPage);
-        age = (date - lastModified) / 1000;
-        cacheRefresh = (expires - date) / 1000;
-
-        page++;
-      } while (page <= maxPage);
+        const responses = UrlFetchApp.fetchAll(requests);
+        for (let i = 0; i < responses.length; i++) {
+          const r = responses[i];
+          const rc = r.getResponseCode();
+          if (rc != 200) {
+            throw ("Eve.getCorporateJobs() Error: " + rc + " " + r.getContentText())
+          }
+          const body = r.getContentText();
+          const parsed = JSON.parse(body);
+          res = res.concat(parsed);
+        }
+      }
 
       return {age: age, cacheRefresh: cacheRefresh, lastModified : lastModified, expires : expires, data : res};
     },
@@ -1017,8 +1044,8 @@ const Eve = (()=>{
 
     },
 
- }
-})()
+ };
+})();
 
 
 function test_resolveNames() {
