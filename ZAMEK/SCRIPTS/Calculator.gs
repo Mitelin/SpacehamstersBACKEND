@@ -233,10 +233,30 @@ const Calculator = (() => {
   };
 
   const priceMaterialInternal = (typeName) => {
-    if (INTERNAL_MATERIAL_PRICE_MODE === 'buyTop5') return priceBuy(typeName);
-    if (INTERNAL_MATERIAL_PRICE_MODE === 'sellTop5') return priceSell(typeName);
-    // default
-    return priceSplit(typeName);
+    // Backward-compatible: return just the numeric unit price.
+    const res = priceMaterialInternalDetailed(typeName);
+    return res ? res.unit : null;
+  };
+
+  const priceMaterialInternalDetailed = (typeName) => {
+    // Some items may be missing in one feed (e.g. splitTop5) but present in others.
+    // For internal calculations we prefer INTERNAL_MATERIAL_PRICE_MODE but fall back
+    // to other feeds to avoid failing whole rows.
+    const preferred = String(INTERNAL_MATERIAL_PRICE_MODE || '').trim();
+    const order = [];
+    if (preferred === 'buyTop5') order.push('buyTop5', 'splitTop5', 'sellTop5');
+    else if (preferred === 'sellTop5') order.push('sellTop5', 'splitTop5', 'buyTop5');
+    else order.push('splitTop5', 'sellTop5', 'buyTop5');
+
+    for (let i = 0; i < order.length; i++) {
+      const mode = order[i];
+      let unit = null;
+      if (mode === 'buyTop5') unit = priceBuy(typeName);
+      else if (mode === 'sellTop5') unit = priceSell(typeName);
+      else unit = priceSplit(typeName);
+      if (unit != null) return { unit, modeUsed: mode, preferredMode: preferred || 'splitTop5' };
+    }
+    return null;
   };
 
   const resolveMaterialMultipliers = (facility) => {
@@ -318,12 +338,12 @@ const Calculator = (() => {
       const name = m.material;
       const qty = Number(m.quantity);
       if (!name || isNaN(qty) || qty <= 0) continue;
-      const unit = priceMaterialInternal(name);
-      if (unit == null) {
-        if (dbg) dbg.missingPrices.push({ type: name, price: INTERNAL_MATERIAL_PRICE_MODE });
-        throw ('Chybí cena (' + INTERNAL_MATERIAL_PRICE_MODE + ') pro: ' + name);
+      const priced = priceMaterialInternalDetailed(name);
+      if (!priced || priced.unit == null) {
+        if (dbg) dbg.missingPrices.push({ type: name, price: 'material:' + INTERNAL_MATERIAL_PRICE_MODE });
+        throw ('Chybí cena (material:' + INTERNAL_MATERIAL_PRICE_MODE + ') pro: ' + name);
       }
-      materialCostGross += qty * unit;
+      materialCostGross += qty * priced.unit;
 
       // Debug-only: alternate price modes for explaining deltas.
       if (dbg) {
@@ -334,7 +354,7 @@ const Calculator = (() => {
       }
 
       if (dbg) {
-        dbg.materials.push({ type: name, qty, unit, cost: qty * unit });
+        dbg.materials.push({ type: name, qty, unit: priced.unit, priceModeUsed: priced.modeUsed, cost: qty * priced.unit });
       }
     }
 
@@ -392,12 +412,12 @@ const Calculator = (() => {
         const consumedQty = Number(consumedByType.get(typeName)) || 0;
         const excessQty = producedQty - consumedQty;
         if (excessQty <= 0) return;
-        const unit = priceMaterialInternal(typeName);
-        if (unit == null) return;
-        const value = excessQty * unit;
+        const priced = priceMaterialInternalDetailed(typeName);
+        if (!priced || priced.unit == null) return;
+        const value = excessQty * priced.unit;
         if (value <= 0) return;
         excessMaterialsValue += value;
-        if (dbg) lines.push({ type: typeName, qty: excessQty, unit, value });
+        if (dbg) lines.push({ type: typeName, qty: excessQty, unit: priced.unit, priceModeUsed: priced.modeUsed, value });
       });
 
       if (dbg && lines.length) {
