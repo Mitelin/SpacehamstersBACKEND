@@ -282,11 +282,29 @@ def add_material(
     return quantity
 
 
-def add_module(result: dict[str, Any], amount: int, level: int, type_id: int, activity_id: int) -> None:
-    # Mirrors current Node logic (no real merging; important for ceil/rounding parity).
-    if level > 1:
-        _m = next((m for m in result["modules"] if m["typeId"] == type_id), None)
-        # Node has a shadowed variable bug here; we intentionally do not use _m.
+def add_module(
+    result: dict[str, Any],
+    amount: int,
+    level: int,
+    type_id: int,
+    activity_id: int,
+    merge_modules: bool = False,
+) -> None:
+    # Legacy behavior intentionally did not merge queued modules (mirrored an older Node implementation).
+    # For more realistic build-cost parity (Cookbook-like), callers can opt-in to merging identical
+    # modules so amounts aggregate before run rounding occurs.
+    if merge_modules and level > 0:
+        existing = next(
+            (
+                m
+                for m in result.get("modules", [])
+                if m.get("typeId") == type_id and m.get("activityId") == activity_id and m.get("level") == level
+            ),
+            None,
+        )
+        if existing:
+            existing["amount"] = int(existing.get("amount") or 0) + int(amount)
+            return
 
     result["modules"].append({"level": level, "typeId": type_id, "activityId": activity_id, "amount": amount})
 
@@ -305,6 +323,7 @@ async def process_blueprint(
     manufacturing_role_bonus: float,
     manufacturing_rig_bonus: float,
     reaction_rig_bonus: float,
+    merge_modules: bool = False,
 ) -> dict[str, Any]:
     materials_job: list[dict[str, Any]] = []
     materials_copy: list[dict[str, Any]] = []
@@ -331,7 +350,7 @@ async def process_blueprint(
             blueprint_source = await get_blueprint_source(e["materialTypeID"])
             if blueprint_source:
                 qty = int(math.ceil(amount / blueprint_source[0]["quantity"]))
-                add_module(result, qty, 1, int(blueprint_source[0]["blueprintTypeId"]), 8)
+                add_module(result, qty, 1, int(blueprint_source[0]["blueprintTypeId"]), 8, merge_modules=merge_modules)
 
         if (e["activityId"] == activity_id) or (copy_bpo and (e["activityId"] == 5) and product["metaGroupID"] == 1):
             quantity = add_material(
@@ -349,11 +368,18 @@ async def process_blueprint(
 
             if e["activityId"] == activity_id:
                 if e.get("blueprintTypeId"):
-                    add_module(result, quantity, level + 1, int(e["blueprintTypeId"]), int(e["activityId"]))
+                    add_module(
+                        result,
+                        quantity,
+                        level + 1,
+                        int(e["blueprintTypeId"]),
+                        int(e["activityId"]),
+                        merge_modules=merge_modules,
+                    )
                 materials_job.append({"type": e["material"], "quantity": quantity, "base_quantity": e["quantity"]})
             else:
                 if e.get("blueprintTypeId"):
-                    add_module(result, quantity, 11, int(e["blueprintTypeId"]), 1)
+                    add_module(result, quantity, 11, int(e["blueprintTypeId"]), 1, merge_modules=merge_modules)
                 materials_copy.append({"type": e["material"], "quantity": quantity, "base_quantity": e["quantity"]})
 
     if add_copy_job:
@@ -399,6 +425,7 @@ async def get_blueprints_details(
     build_t1: bool,
     copy_bpo: bool,
     produce_fuel_blocks: bool,
+    merge_modules: bool = False,
     manufacturing_role_bonus: float = 0.99,
     manufacturing_rig_bonus: float = 0.958,
     reaction_rig_bonus: float = 0.974,
@@ -408,7 +435,7 @@ async def get_blueprints_details(
     log(2, "blueprints.getBlueprintsDetails()")
 
     for t in types:
-        add_module(result, int(t["amount"]), 1, int(t["typeId"]), 1)
+        add_module(result, int(t["amount"]), 1, int(t["typeId"]), 1, merge_modules=merge_modules)
 
     while result["modules"]:
         module = result["modules"].pop(0)
@@ -471,9 +498,12 @@ async def get_blueprints_details(
                     te,
                     copy_bpo,
                     produce_fuel_blocks,
+                    # Multipliers
                     manufacturing_role_bonus,
                     manufacturing_rig_bonus,
                     reaction_rig_bonus,
+                    # Queue behavior
+                    merge_modules,
                 )
 
     result.pop("modules", None)
@@ -488,6 +518,7 @@ async def get_blueprint_details(
     build_t1: bool,
     copy_bpo: bool,
     produce_fuel_blocks: bool,
+    merge_modules: bool = False,
     manufacturing_role_bonus: float = 0.99,
     manufacturing_rig_bonus: float = 0.958,
     reaction_rig_bonus: float = 0.974,
@@ -498,6 +529,7 @@ async def get_blueprint_details(
         build_t1=build_t1,
         copy_bpo=copy_bpo,
         produce_fuel_blocks=produce_fuel_blocks,
+        merge_modules=merge_modules,
         manufacturing_role_bonus=manufacturing_role_bonus,
         manufacturing_rig_bonus=manufacturing_rig_bonus,
         reaction_rig_bonus=reaction_rig_bonus,

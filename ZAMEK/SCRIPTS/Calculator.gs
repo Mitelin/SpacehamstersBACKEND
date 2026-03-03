@@ -182,6 +182,11 @@ const Calculator = (() => {
     const facility = getDefaultFacilityConfig();
     const req = {
       types: [{ typeId: blueprintTypeId, amount: 1 }],
+
+      // Backend optional: merge identical queued modules before expanding the chain.
+      // This reduces rounding-driven overbuild for complex T2 trees.
+      mergeModules: true,
+
       shipT1ME: DEFAULT_ME_T1,
       shipT1TE: DEFAULT_TE_T1,
       shipT2ME: DEFAULT_ME_T2,
