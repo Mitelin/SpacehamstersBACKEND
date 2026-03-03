@@ -338,6 +338,8 @@ const Calculator = (() => {
       const name = m.material;
       const qty = Number(m.quantity);
       if (!name || isNaN(qty) || qty <= 0) continue;
+      // Blueprint "materials" can show up in some datasets; they are not priced market inputs.
+      if (String(name).endsWith('Blueprint')) continue;
       const priced = priceMaterialInternalDetailed(name);
       if (!priced || priced.unit == null) {
         if (dbg) dbg.missingPrices.push({ type: name, price: 'material:' + INTERNAL_MATERIAL_PRICE_MODE });
