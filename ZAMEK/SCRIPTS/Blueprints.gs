@@ -1944,6 +1944,14 @@ function runUpdateAllProjects() {
 
   _time('runUpdateAllProjects', () => {
     const ss = SpreadsheetApp.getActive();
+
+    // Warm caches once (may trigger a single sync if expired).
+    if (typeof Corporation !== 'undefined') {
+      if (Corporation.loadAssets) _time('warm cache: assets', () => Corporation.loadAssets());
+      if (Corporation.loadJobs) _time('warm cache: jobs', () => Corporation.loadJobs());
+      if (Corporation.loadBlueprints) _time('warm cache: blueprints', () => Corporation.loadBlueprints());
+    }
+
     const names = [
       'Projekt ALPRO 1',
       'Projekt ALPRO 2',

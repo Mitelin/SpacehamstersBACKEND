@@ -818,6 +818,7 @@ const Corporation = (()=>{
       if (new Date().getTime() > assets.expires) {
         Sidebar.add("Aktualizuju cache skladu");
         this.syncAssets();
+        date = new Date().getTime();
         assets.lastModified = assetsSheet.getRange(1,9,1,1).getValue();
         assets.expires = assetsSheet.getRange(1,10,1,1).getValue();
         assets.age = Math.trunc((date - assets.lastModified) / 1000);
@@ -862,8 +863,10 @@ const Corporation = (()=>{
 
       // clean insustry jobs sheet
       var lastRow = industryJobsSheet.getLastRow();
-      range = industryJobsSheet.getRange(2, 1, lastRow - 1, 19);
-      range.setValue('');
+      if (lastRow > 1) {
+        range = industryJobsSheet.getRange(2, 1, lastRow - 1, 19);
+        range.setValue('');
+      }
 
       // get all running jobs
       var jobs = Corporation.getJobs([], true);
@@ -933,6 +936,7 @@ const Corporation = (()=>{
       if (date > jobs.expires) {
         Sidebar.add("Aktualizuju cache jobů");
         this.syncJobs();
+        date = new Date().getTime();
         jobs.lastModified = industryJobsSheet.getRange(1,21,1,1).getValue();
         jobs.expires = industryJobsSheet.getRange(1,22,1,1).getValue();
         jobs.age = Math.trunc((date - jobs.lastModified) / 1000);
@@ -1038,6 +1042,7 @@ const Corporation = (()=>{
       if (date > blueprints.expires) {
         Sidebar.add("Aktualizuju cache blueprintů");
         this.syncBlueprints();
+        date = new Date().getTime();
         blueprints.lastModified = blueprintsSheet.getRange(1,12,1,1).getValue();
         blueprints.expires = blueprintsSheet.getRange(1,13,1,1).getValue();
         blueprints.age = Math.trunc((date - blueprints.lastModified) / 1000);
