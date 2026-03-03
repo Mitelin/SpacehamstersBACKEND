@@ -5,6 +5,7 @@ const Calculator = (() => {
 
   const COL_ITEM = 1; // A
   const COL_COST = 2; // B
+  const COL_COOKBOOK = 3; // C
 
   const FONT_OK = '#000000';
   const FONT_ERR = '#ff0000';
@@ -101,7 +102,7 @@ const Calculator = (() => {
 
   const clearNotes = (sheet) => {
     // Notes are used only for debug mode; clear them so stale info doesn't stick.
-    sheet.getRange(START_ROW, COL_ITEM, ROW_COUNT, 2).clearNote();
+    sheet.getRange(START_ROW, COL_ITEM, ROW_COUNT, 3).clearNote();
   };
 
   const markRowError = (sheet, rowIndex0) => {
@@ -393,6 +394,7 @@ const Calculator = (() => {
 
       // Prepare outputs
       const outCosts = Array.from({ length: ROW_COUNT }, () => ['']);
+      const outCookbook = Array.from({ length: ROW_COUNT }, () => ['']);
 
       // Row-level debug blobs (only used when debug=true)
       const rowDebug = debug ? new Array(ROW_COUNT).fill(null) : null;
@@ -429,6 +431,7 @@ const Calculator = (() => {
       if (blueprintIds.length === 0) {
         // Nothing to do; still clear old outputs
         sheet.getRange(START_ROW, COL_COST, ROW_COUNT, 1).setValues(outCosts);
+        sheet.getRange(START_ROW, COL_COOKBOOK, ROW_COUNT, 1).setValues(outCookbook);
         return;
       }
 
@@ -444,8 +447,9 @@ const Calculator = (() => {
         systemCostIndexByActivity = getCostIndexMapForSystem(systemId);
       }
 
-      if (CALC_MODE === 'cookbook') {
-        // Batch API calls to keep URLs reasonable
+      // Always try to fetch Cookbook prices into column C for comparison.
+      // Cookbook may fail/rate-limit independently; we keep internal B intact.
+      {
         const BATCH = 20;
         for (let start = 0; start < blueprintIds.length; start += BATCH) {
           const batchIds = blueprintIds.slice(start, start + BATCH);
@@ -453,25 +457,34 @@ const Calculator = (() => {
           try {
             data = fetchBuildCosts(batchIds, systemName);
           } catch (e) {
-            batchIds.forEach(id => {
-              const rows = rowByBlueprintId.get(String(id)) || [];
-              rows.forEach(r => markRowError(sheet, r));
-            });
+            if (debug) {
+              batchIds.forEach(id => {
+                const rows = rowByBlueprintId.get(String(id)) || [];
+                rows.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, 'Cookbook error: ' + e));
+              });
+            }
             continue;
           }
 
           if (!Array.isArray(data)) {
-            batchIds.forEach(id => {
-              const rows = rowByBlueprintId.get(String(id)) || [];
-              rows.forEach(r => markRowError(sheet, r));
-            });
+            if (debug) {
+              batchIds.forEach(id => {
+                const rows = rowByBlueprintId.get(String(id)) || [];
+                rows.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, 'Cookbook invalid response (not array)'));
+              });
+            }
             continue;
           }
 
           data.forEach(entry => {
             if (!entry) return;
             const status = (typeof entry.status === 'string') ? Number(entry.status) : entry.status;
-            if (status !== 200) return;
+            if (status !== 200) {
+              if (debug) {
+                // We don't know blueprintTypeId reliably here; skip per-row note.
+              }
+              return;
+            }
             const message = entry.message;
             if (!message) return;
             const blueprintTypeId =
@@ -482,8 +495,15 @@ const Calculator = (() => {
             const cost = message.buildCostPerUnit;
             if (blueprintTypeId == null || cost == null) return;
             const rows = rowByBlueprintId.get(String(blueprintTypeId)) || [];
-            rows.forEach(r => { outCosts[r][0] = cost; });
+            rows.forEach(r => { outCookbook[r][0] = cost; });
           });
+        }
+      }
+
+      if (CALC_MODE === 'cookbook') {
+        // In cookbook-only mode mirror column C into B.
+        for (let i = 0; i < ROW_COUNT; i++) {
+          if (outCookbook[i][0] !== '' && outCookbook[i][0] != null) outCosts[i][0] = outCookbook[i][0];
         }
       } else {
         // INTERNAL mode: compute per blueprint (cached for duplicates).
@@ -514,12 +534,13 @@ const Calculator = (() => {
         }
       }
 
-      // Any non-empty names with empty cost are treated as error (not found / API mismatch)
+      // Any non-empty names with empty INTERNAL cost are treated as error.
+      // Cookbook column C may be empty due to rate limit / invalid blueprint in Cookbook etc.
       for (let i = 0; i < names.length; i++) {
         if (names[i] && (outCosts[i][0] === '' || outCosts[i][0] == null)) {
           markRowError(sheet, i);
           if (debug && !sheet.getRange(START_ROW + i, COL_ITEM, 1, 1).getNote()) {
-            setRowNote(sheet, i, COL_ITEM, 'Nevyšla cena (prázdný výsledek). Mrkni do logu, nebo do poznámky u sloupce B.');
+            setRowNote(sheet, i, COL_ITEM, 'Nevyšla interní cena (sloupec B prázdný). Mrkni do poznámky u sloupce B.');
           }
         }
       }
@@ -591,6 +612,7 @@ const Calculator = (() => {
 
       // Write outputs
       sheet.getRange(START_ROW, COL_COST, ROW_COUNT, 1).setValues(outCosts);
+      sheet.getRange(START_ROW, COL_COOKBOOK, ROW_COUNT, 1).setValues(outCookbook);
     },
   };
 })();

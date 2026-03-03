@@ -1040,7 +1040,38 @@ globalThis.Eve = globalThis.Eve || (()=>{
       var json = response.getContentText();
       var data = JSON.parse(json);
 
-      return data;
+      // Cookbook may return either an array (multi-blueprint) or a single object.
+      // Normalize to an array for all callers.
+      var arr;
+      if (Array.isArray(data)) {
+        arr = data;
+      } else if (data && typeof data === 'object') {
+        // Some APIs wrap in {data:[...]}
+        if (Array.isArray(data.data)) {
+          arr = data.data;
+        } else {
+          arr = [data];
+        }
+      } else {
+        arr = [{ error: 1, status: '0', message: String(data) }];
+      }
+
+      // Cookbook swagger says message is string, but in practice it can be an object.
+      // If it's a JSON string, parse it for easier consumption.
+      for (var i = 0; i < arr.length; i++) {
+        if (arr[i] && typeof arr[i].message === 'string') {
+          var m = arr[i].message;
+          if (m && (m.startsWith('{') || m.startsWith('['))) {
+            try {
+              arr[i].message = JSON.parse(m);
+            } catch (e) {
+              // keep original string
+            }
+          }
+        }
+      }
+
+      return arr;
 
     },
 
