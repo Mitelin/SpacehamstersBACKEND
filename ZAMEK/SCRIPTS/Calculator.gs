@@ -18,6 +18,12 @@ const Calculator = (() => {
   // Keep as a constant so we can calibrate against Cookbook if needed.
   const SCC_SURCHARGE_RATE = 0.04; // 4%
 
+  // Align with Cookbook defaults for comparisons.
+  const DEFAULT_ME_T1 = 10;
+  const DEFAULT_TE_T1 = 10;
+  const DEFAULT_ME_T2 = 10;
+  const DEFAULT_TE_T2 = 10;
+
   // Internal material pricing mode. Cookbook's `priceMode=sell` tracks our `jitaSplitTop5` very closely.
   // Keep configurable for future calibration.
   const INTERNAL_MATERIAL_PRICE_MODE = 'splitTop5'; // 'sellTop5' | 'buyTop5' | 'splitTop5'
@@ -176,14 +182,14 @@ const Calculator = (() => {
     const facility = getDefaultFacilityConfig();
     const req = {
       types: [{ typeId: blueprintTypeId, amount: 1 }],
-      shipT1ME: 10,
-      shipT1TE: 10,
-      shipT2ME: 0,
-      shipT2TE: 0,
-      moduleT1ME: 10,
-      moduleT1TE: 10,
-      moduleT2ME: 0,
-      moduleT2TE: 0,
+      shipT1ME: DEFAULT_ME_T1,
+      shipT1TE: DEFAULT_TE_T1,
+      shipT2ME: DEFAULT_ME_T2,
+      shipT2TE: DEFAULT_TE_T2,
+      moduleT1ME: DEFAULT_ME_T1,
+      moduleT1TE: DEFAULT_TE_T1,
+      moduleT2ME: DEFAULT_ME_T2,
+      moduleT2TE: DEFAULT_TE_T2,
       produceFuelBlocks: false,
       buildT1: false,
       copyBPO: false,
@@ -807,6 +813,8 @@ const Calculator = (() => {
           lines.push('blueprintTypeId: ' + dbg.blueprintTypeId);
           if (dbg.system && dbg.system.name) lines.push('system: ' + dbg.system.name);
           lines.push('materialPriceMode(internal): ' + String(INTERNAL_MATERIAL_PRICE_MODE));
+          lines.push('ME/TE T1: ' + String(DEFAULT_ME_T1) + '/' + String(DEFAULT_TE_T1));
+          lines.push('ME/TE T2: ' + String(DEFAULT_ME_T2) + '/' + String(DEFAULT_TE_T2));
           if (dbg.facility) {
             lines.push('facilityTax%: ' + String(dbg.facility.facilityTax));
             lines.push('industry: ' + String(dbg.facility.industryStructureType) + ' rig ' + String(dbg.facility.industryRig));
