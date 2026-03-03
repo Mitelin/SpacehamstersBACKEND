@@ -491,6 +491,33 @@ function _doctrinesUpsertItems_(sheet, itemCol, parsed) {
     return 0;
   }
 
+  function isBoosterOrDrug(typeName) {
+    const n = String(typeName == null ? '' : typeName).trim().toLowerCase();
+    if (!n) return false;
+
+    // Ancillary exceptions: ONLY these module families are buy-list.
+    // Avoid false-positives like "Medium Ancillary Current Router I" (a rig, buildable).
+    if (n.includes('ancillary armor repairer')) return true;
+    if (n.includes('ancillary shield booster')) return true;
+
+    // Combat boosters / drugs: always buy list.
+    // We must avoid false-positives like "Small Capacitor Booster II" or "Shield Booster" modules.
+    // We therefore match ONLY combat-booster-specific patterns.
+
+    // New-style combat boosters: "Agency 'Pyrolancea' DB3 Dose I" etc.
+    if (n.includes(' dose ')) return true;
+    if (n.endsWith(' dose i') || n.endsWith(' dose ii') || n.endsWith(' dose iii')) return true;
+    if (n.includes("'pyrolancea'")) return true;
+
+    // Legacy combat boosters: tier keyword + known booster family keyword + word "booster".
+    // Examples: "Synth Blue Pill Booster", "Standard Exile Booster", "Improved X-Instinct Booster", "Strong Crash Booster".
+    const hasTier = /\b(synth|standard|improved|strong)\b/i.test(typeName);
+    const hasFamily = /(blue pill|exile|x-instinct|crash|drop|mindflood|frentix|sooth sayer|vitoc|nugoehuvi)/i.test(typeName);
+    if (hasTier && hasFamily && n.includes('booster')) return true;
+
+    return false;
+  }
+
   function isBuildable(typeName) {
     // Charges always go to buy list.
     // For everything else: try to find a blueprint type ("X Blueprint").
@@ -514,7 +541,7 @@ function _doctrinesUpsertItems_(sheet, itemCol, parsed) {
       continue;
     }
 
-    const toBuyList = (it.kind === 'charge') ? true : !isBuildable(name);
+    const toBuyList = (it.kind === 'charge') ? true : (isBoosterOrDrug(name) ? true : !isBuildable(name));
 
     if (!toBuyList) {
       const row = findFirstEmptyRow(BUILD_START_ROW, BUILD_END_ROW);
