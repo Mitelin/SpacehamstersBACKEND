@@ -392,7 +392,7 @@ const Calculator = (() => {
         const consumedQty = Number(consumedByType.get(typeName)) || 0;
         const excessQty = producedQty - consumedQty;
         if (excessQty <= 0) return;
-        const unit = priceSell(typeName);
+        const unit = priceMaterialInternal(typeName);
         if (unit == null) return;
         const value = excessQty * unit;
         if (value <= 0) return;
@@ -784,6 +784,7 @@ const Calculator = (() => {
           const lines = [];
           lines.push('blueprintTypeId: ' + dbg.blueprintTypeId);
           if (dbg.system && dbg.system.name) lines.push('system: ' + dbg.system.name);
+          lines.push('materialPriceMode(internal): ' + String(INTERNAL_MATERIAL_PRICE_MODE));
           if (dbg.facility) {
             lines.push('facilityTax%: ' + String(dbg.facility.facilityTax));
             lines.push('industry: ' + String(dbg.facility.industryStructureType) + ' rig ' + String(dbg.facility.industryRig));
@@ -820,6 +821,8 @@ const Calculator = (() => {
                 String(j.esiActivity) +
                 ' runs=' + String(j.runs) +
                 ' base=' + formatIsk(j.baseValue) +
+                ' mult=' + String(j.baseMultiplier) +
+                ' effBase=' + formatIsk(j.effectiveBaseValue) +
                 ' idx=' + String(j.costIndex) +
                 ' fee=' + formatIsk(j.fee) +
                 ' tax=' + formatIsk(j.tax) +
