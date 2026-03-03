@@ -294,17 +294,28 @@ def add_module(
     # For more realistic build-cost parity (Cookbook-like), callers can opt-in to merging identical
     # modules so amounts aggregate before run rounding occurs.
     if merge_modules and level > 0:
-        # Merge by blueprint identity + activity. Level is informative only; keep the max level.
+        # IMPORTANT: `get_blueprints_details` uses `module.level == 2` as a special gate to allow
+        # matching invention activity (activityId==8) in some cases.
+        # Therefore, we must not merge level==2 modules with non-2 levels.
+        level_is_invention_gate = int(level) == 2
         existing = next(
-            (m for m in result.get("modules", []) if m.get("typeId") == type_id and m.get("activityId") == activity_id),
+            (
+                m
+                for m in result.get("modules", [])
+                if m.get("typeId") == type_id
+                and m.get("activityId") == activity_id
+                and (int(m.get("level") or 0) == 2) == level_is_invention_gate
+            ),
             None,
         )
         if existing:
             existing["amount"] = int(existing.get("amount") or 0) + int(amount)
-            try:
-                existing["level"] = max(int(existing.get("level") or 0), int(level))
-            except Exception:
-                existing["level"] = level
+            # Preserve whether this entry is the invention-gated one.
+            if int(existing.get("level") or 0) != 2:
+                try:
+                    existing["level"] = max(int(existing.get("level") or 0), int(level))
+                except Exception:
+                    existing["level"] = level
 
             stats = result.setdefault("_merge_stats", {"merged": 0, "added": 0})
             stats["merged"] = int(stats.get("merged") or 0) + 1
