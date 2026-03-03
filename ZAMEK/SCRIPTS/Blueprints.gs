@@ -1945,26 +1945,39 @@ function runUpdateAllProjects() {
   _time('runUpdateAllProjects', () => {
     const ss = SpreadsheetApp.getActive();
 
-    // Warm caches once (may trigger a single sync if expired).
-    if (typeof Corporation !== 'undefined') {
-      if (Corporation.loadAssets) _time('warm cache: assets', () => Corporation.loadAssets());
-      if (Corporation.loadJobs) _time('warm cache: jobs', () => Corporation.loadJobs());
-      if (Corporation.loadBlueprints) _time('warm cache: blueprints', () => Corporation.loadBlueprints());
+    // Freeze memo caches for the duration of this run.
+    // This prevents short ESI cache lifetimes (e.g. jobs ~5 min) from forcing
+    // mid-run refreshes when updating multiple projects.
+    if (typeof Corporation !== 'undefined' && Corporation.freezeMemo) {
+      Corporation.freezeMemo();
     }
 
-    const names = [
-      'Projekt ALPRO 1',
-      'Projekt ALPRO 2',
-      'Projekt ALPRO 3',
-      'Projekt ALPRO 4',
-      'Projekt ALPRO 5',
-      'Projekt ALPRO 6',
-      'Projekt ALPRO 7',
-    ];
+    try {
+      // Warm caches once (may trigger a single sync if expired).
+      if (typeof Corporation !== 'undefined') {
+        if (Corporation.loadAssets) _time('warm cache: assets', () => Corporation.loadAssets());
+        if (Corporation.loadJobs) _time('warm cache: jobs', () => Corporation.loadJobs());
+        if (Corporation.loadBlueprints) _time('warm cache: blueprints', () => Corporation.loadBlueprints());
+      }
 
-    names.forEach(name => {
-      _time('update: ' + name, () => Blueprints.updateProject(ss.getSheetByName(name), false));
-    });
+      const names = [
+        'Projekt ALPRO 1',
+        'Projekt ALPRO 2',
+        'Projekt ALPRO 3',
+        'Projekt ALPRO 4',
+        'Projekt ALPRO 5',
+        'Projekt ALPRO 6',
+        'Projekt ALPRO 7',
+      ];
+
+      names.forEach(name => {
+        _time('update: ' + name, () => Blueprints.updateProject(ss.getSheetByName(name), false));
+      });
+    } finally {
+      if (typeof Corporation !== 'undefined' && Corporation.unfreezeMemo) {
+        Corporation.unfreezeMemo();
+      }
+    }
   });
 
   SpreadsheetApp.getUi().alert('Aktualizace dokončena', '', SpreadsheetApp.getUi().ButtonSet.OK);

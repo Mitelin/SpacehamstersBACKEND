@@ -64,10 +64,19 @@ const Corporation = (()=>{
     blueprints: null,
   };
 
+  // When true, reuse in-memory memo for the rest of the execution,
+  // even if the sheet cache expiry passes mid-run.
+  // Intended for long pipelines like runUpdateAllProjects().
+  var _freezeMemo = false;
+
   var _resetMemo = function() {
     _cacheMemo.assets = null;
     _cacheMemo.jobs = null;
     _cacheMemo.blueprints = null;
+  }
+
+  var _setFreezeMemo = function(on) {
+    _freezeMemo = on ? true : false;
   }
 
   const corpSAGMap = new Map();
@@ -801,6 +810,10 @@ const Corporation = (()=>{
     loadAssets: function() {
       Logger.log ('### Loading corporate assets ...')
 
+      if (_cacheMemo.assets && _freezeMemo) {
+        return _cacheMemo.assets;
+      }
+
       // If runtime is warm and memo is present, only reuse it while it is still valid.
       if (_cacheMemo.assets && _cacheMemo.assets.expires && (new Date().getTime() <= _cacheMemo.assets.expires)) {
         return _cacheMemo.assets;
@@ -918,6 +931,10 @@ const Corporation = (()=>{
     loadJobs: function() {
       Logger.log ('### Loading corporate jobs ...')
 
+      if (_cacheMemo.jobs && _freezeMemo) {
+        return _cacheMemo.jobs;
+      }
+
       // If runtime is warm and memo is present, only reuse it while it is still valid.
       if (_cacheMemo.jobs && _cacheMemo.jobs.expires && (new Date().getTime() <= _cacheMemo.jobs.expires)) {
         return _cacheMemo.jobs;
@@ -1025,6 +1042,10 @@ const Corporation = (()=>{
     loadBlueprints: function() {
       Logger.log ('### Loading corporate blueprints ...')
 
+      if (_cacheMemo.blueprints && _freezeMemo) {
+        return _cacheMemo.blueprints;
+      }
+
       // If runtime is warm and memo is present, only reuse it while it is still valid.
       if (_cacheMemo.blueprints && _cacheMemo.blueprints.expires && (new Date().getTime() <= _cacheMemo.blueprints.expires)) {
         return _cacheMemo.blueprints;
@@ -1086,6 +1107,16 @@ const Corporation = (()=>{
     // Manual memo reset (useful at the beginning of pipelines)
     resetMemo: function() {
       _resetMemo();
+    },
+
+    // Freeze/unfreeze memo reuse for the current Apps Script execution.
+    // When frozen, loadAssets/loadJobs/loadBlueprints will NOT re-sync mid-run.
+    freezeMemo: function() {
+      _setFreezeMemo(true);
+    },
+
+    unfreezeMemo: function() {
+      _setFreezeMemo(false);
     },
 
 
