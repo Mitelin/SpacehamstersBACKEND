@@ -332,6 +332,7 @@ const Calculator = (() => {
 
     const dbg = debug ? {
       blueprintTypeId,
+      backendMeta: (data && data.meta) ? data.meta : null,
       system: {
         name: getDefaultSystemName(),
         costIndexManufacturing: systemCostIndexByActivity ? systemCostIndexByActivity.get('manufacturing') : null,
@@ -856,6 +857,7 @@ const Calculator = (() => {
           // Human-readable breakdown note.
           const lines = [];
           lines.push('blueprintTypeId: ' + dbg.blueprintTypeId);
+          if (dbg.backendMeta) lines.push('backendMeta: ' + JSON.stringify(dbg.backendMeta));
           if (dbg.system && dbg.system.name) lines.push('system: ' + dbg.system.name);
           lines.push('materialPriceMode(internal): ' + String(INTERNAL_MATERIAL_PRICE_MODE));
           lines.push('ME/TE T1: ' + String(DEFAULT_ME_T1) + '/' + String(DEFAULT_TE_T1));

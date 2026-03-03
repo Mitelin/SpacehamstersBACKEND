@@ -294,18 +294,25 @@ def add_module(
     # For more realistic build-cost parity (Cookbook-like), callers can opt-in to merging identical
     # modules so amounts aggregate before run rounding occurs.
     if merge_modules and level > 0:
+        # Merge by blueprint identity + activity. Level is informative only; keep the max level.
         existing = next(
-            (
-                m
-                for m in result.get("modules", [])
-                if m.get("typeId") == type_id and m.get("activityId") == activity_id and m.get("level") == level
-            ),
+            (m for m in result.get("modules", []) if m.get("typeId") == type_id and m.get("activityId") == activity_id),
             None,
         )
         if existing:
             existing["amount"] = int(existing.get("amount") or 0) + int(amount)
+            try:
+                existing["level"] = max(int(existing.get("level") or 0), int(level))
+            except Exception:
+                existing["level"] = level
+
+            stats = result.setdefault("_merge_stats", {"merged": 0, "added": 0})
+            stats["merged"] = int(stats.get("merged") or 0) + 1
             return
 
+    if merge_modules:
+        stats = result.setdefault("_merge_stats", {"merged": 0, "added": 0})
+        stats["added"] = int(stats.get("added") or 0) + 1
     result["modules"].append({"level": level, "typeId": type_id, "activityId": activity_id, "amount": amount})
 
 
@@ -505,6 +512,15 @@ async def get_blueprints_details(
                     # Queue behavior
                     merge_modules,
                 )
+
+    if merge_modules:
+        stats = result.get("_merge_stats") or {}
+        result["meta"] = {
+            "mergeModules": True,
+            "modulesAdded": int(stats.get("added") or 0),
+            "modulesMerged": int(stats.get("merged") or 0),
+        }
+        result.pop("_merge_stats", None)
 
     result.pop("modules", None)
     log(1, "blueprints.getBlueprintsDetails finished")
