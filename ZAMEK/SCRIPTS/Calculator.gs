@@ -251,6 +251,7 @@ const Calculator = (() => {
       materialCostGross: 0,
       excessMaterialsValue: 0,
       materialCost: 0,
+      materialCostNetIfSellExcess: 0,
       jobCost: 0,
       producedQuantity: null,
     } : null;
@@ -345,8 +346,10 @@ const Calculator = (() => {
       }
     }
 
-    // Net material cost (matches Cookbook's style: show excess separately but use net for total)
-    const materialCost = materialCostGross - excessMaterialsValue;
+    // Cookbook's totalCost uses materialCost + jobCost; excessMaterialsValue is informational.
+    // So for parity we keep materialCost == gross input cost.
+    const materialCost = materialCostGross;
+    const materialCostNetIfSellExcess = materialCostGross - excessMaterialsValue;
 
     // 2) Job cost: approximate installation cost using adjusted price + ESI system cost index.
     // IMPORTANT: SCC surcharge + facility tax are applied on the job BASE value (not on the index fee).
@@ -417,6 +420,7 @@ const Calculator = (() => {
       dbg.materialCostGross = materialCostGross;
       dbg.excessMaterialsValue = excessMaterialsValue;
       dbg.materialCost = materialCost;
+      dbg.materialCostNetIfSellExcess = materialCostNetIfSellExcess;
       dbg.jobCost = jobCost;
       dbg.producedQuantity = producedQty;
 
@@ -675,9 +679,10 @@ const Calculator = (() => {
             lines.push('reaction: ' + String(dbg.facility.reactionStructureType) + ' rig ' + String(dbg.facility.reactionRig));
           }
           lines.push('producedQty: ' + String(dbg.producedQuantity));
-          if (dbg.materialCostGross != null) lines.push('materialCostGross: ' + formatIsk(dbg.materialCostGross));
+          // Cookbook semantics: totalCost = materialCost + jobCost; excess is informational.
+          if (dbg.materialCost != null) lines.push('materialCost: ' + formatIsk(dbg.materialCost));
           if (dbg.excessMaterialsValue != null) lines.push('excessMaterialsValue: ' + formatIsk(dbg.excessMaterialsValue));
-          lines.push('materialCost(net): ' + formatIsk(dbg.materialCost));
+          if (dbg.materialCostNetIfSellExcess != null) lines.push('materialCostNetIfSellExcess: ' + formatIsk(dbg.materialCostNetIfSellExcess));
           lines.push('jobCost: ' + formatIsk(dbg.jobCost));
           lines.push('SCC surcharge: ' + String(dbg.sccSurchargeRate));
           if (dbg.system) {
