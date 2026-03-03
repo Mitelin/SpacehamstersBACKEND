@@ -113,6 +113,17 @@ def create_app() -> Starlette:
         if produce_fuel_blocks is None:
             produce_fuel_blocks = True
 
+        # Optional facility/rig configuration (used for material multipliers).
+        # If omitted, service defaults preserve legacy behavior.
+        m_role, m_rig, r_rig = blueprints_service.resolve_material_multipliers(
+            body.get("industryStructureType"),
+            body.get("industryRig"),
+            body.get("reactionRig"),
+            manufacturing_role_bonus=body.get("manufacturingRoleBonus"),
+            manufacturing_rig_bonus=body.get("manufacturingRigBonus"),
+            reaction_rig_bonus=body.get("reactionRigBonus"),
+        )
+
         try:
             details = await blueprints_service.get_blueprints_details(
                 body.get("types") or [],
@@ -120,6 +131,9 @@ def create_app() -> Starlette:
                 bool(build_t1),
                 bool(copy_bpo),
                 bool(produce_fuel_blocks),
+                manufacturing_role_bonus=m_role,
+                manufacturing_rig_bonus=m_rig,
+                reaction_rig_bonus=r_rig,
             )
             return JSONResponse(details)
         except Exception as exc:
@@ -154,6 +168,15 @@ def create_app() -> Starlette:
         if produce_fuel_blocks is None:
             produce_fuel_blocks = True
 
+        m_role, m_rig, r_rig = blueprints_service.resolve_material_multipliers(
+            body.get("industryStructureType"),
+            body.get("industryRig"),
+            body.get("reactionRig"),
+            manufacturing_role_bonus=body.get("manufacturingRoleBonus"),
+            manufacturing_rig_bonus=body.get("manufacturingRigBonus"),
+            reaction_rig_bonus=body.get("reactionRigBonus"),
+        )
+
         amount = body.get("amount")
         if amount is None:
             return PlainTextResponse("Chyba: amount missing")
@@ -166,6 +189,9 @@ def create_app() -> Starlette:
                 bool(build_t1),
                 bool(copy_bpo),
                 bool(produce_fuel_blocks),
+                manufacturing_role_bonus=m_role,
+                manufacturing_rig_bonus=m_rig,
+                reaction_rig_bonus=r_rig,
             )
             return JSONResponse(details)
         except Exception as exc:

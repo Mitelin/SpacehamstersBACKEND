@@ -7,6 +7,50 @@ from .. import db
 from ..logger import log
 
 
+def resolve_material_multipliers(
+    industry_structure_type: str | None,
+    industry_rig: str | None,
+    reaction_rig: str | None,
+    manufacturing_role_bonus: float | None = None,
+    manufacturing_rig_bonus: float | None = None,
+    reaction_rig_bonus: float | None = None,
+) -> tuple[float, float, float]:
+    """Resolve facility configuration into material multipliers.
+
+    Notes:
+    - Defaults preserve legacy behavior (0.99 * 0.958 for manufacturing; 0.974 for reactions).
+    - Values are intentionally simple and can be overridden explicitly.
+    """
+
+    # 1) Manufacturing role bonus (structure bonus)
+    if manufacturing_role_bonus is None:
+        st = (industry_structure_type or "").strip().lower()
+        # NPC stations have no structure role bonus.
+        manufacturing_role_bonus = 1.0 if st in {"station", ""} else 0.99
+
+    # 2) Manufacturing rig bonus
+    if manufacturing_rig_bonus is None:
+        rig = (industry_rig or "").strip().upper()
+        if rig == "T1":
+            manufacturing_rig_bonus = 0.976
+        elif rig == "T2":
+            manufacturing_rig_bonus = 0.958
+        else:
+            manufacturing_rig_bonus = 1.0
+
+    # 3) Reaction rig bonus
+    if reaction_rig_bonus is None:
+        rrig = (reaction_rig or "").strip().upper()
+        if rrig == "T1":
+            reaction_rig_bonus = 0.986
+        elif rrig == "T2":
+            reaction_rig_bonus = 0.974
+        else:
+            reaction_rig_bonus = 1.0
+
+    return float(manufacturing_role_bonus), float(manufacturing_rig_bonus), float(reaction_rig_bonus)
+
+
 async def get_blueprint_products(type_id: int) -> list[dict[str, Any]]:
     rows = await db.fetch_all(
         """
@@ -179,6 +223,9 @@ def add_material(
     material: dict[str, Any],
     bp_me: int,
     is_advanced: bool,
+    manufacturing_role_bonus: float = 0.99,
+    manufacturing_rig_bonus: float = 0.958,
+    reaction_rig_bonus: float = 0.974,
 ) -> int:
     existing = next(
         (m for m in result["materials"] if m["materialTypeID"] == material["materialTypeID"]),
@@ -194,14 +241,14 @@ def add_material(
                     amount
                     * material["quantity"]
                     * ((100.0 - float(bp_me)) / 100.0)
-                    * 0.99
-                    * 0.958
+                    * float(manufacturing_role_bonus)
+                    * float(manufacturing_rig_bonus)
                 )
                 / product["quantity"]
             )
         )
     else:
-        quantity = int(math.ceil((amount * material["quantity"] * 0.974) / product["quantity"]))
+        quantity = int(math.ceil((amount * material["quantity"] * float(reaction_rig_bonus)) / product["quantity"]))
 
     quantity_basic_manufacture = quantity if (material["activityId"] == 1 and not is_advanced) else 0
     quantity_advanced_manufacture = quantity if (material["activityId"] == 1 and is_advanced) else 0
@@ -255,6 +302,9 @@ async def process_blueprint(
     typete: int,
     copy_bpo: bool,
     produce_fuel_blocks: bool,
+    manufacturing_role_bonus: float,
+    manufacturing_rig_bonus: float,
+    reaction_rig_bonus: float,
 ) -> dict[str, Any]:
     materials_job: list[dict[str, Any]] = []
     materials_copy: list[dict[str, Any]] = []
@@ -284,7 +334,18 @@ async def process_blueprint(
                 add_module(result, qty, 1, int(blueprint_source[0]["blueprintTypeId"]), 8)
 
         if (e["activityId"] == activity_id) or (copy_bpo and (e["activityId"] == 5) and product["metaGroupID"] == 1):
-            quantity = add_material(result, amount, level, product, e, typeme, is_advanced)
+            quantity = add_material(
+                result,
+                amount,
+                level,
+                product,
+                e,
+                typeme,
+                is_advanced,
+                manufacturing_role_bonus=manufacturing_role_bonus,
+                manufacturing_rig_bonus=manufacturing_rig_bonus,
+                reaction_rig_bonus=reaction_rig_bonus,
+            )
 
             if e["activityId"] == activity_id:
                 if e.get("blueprintTypeId"):
@@ -304,7 +365,18 @@ async def process_blueprint(
             "quantity": 1,
         }
         copy_quantity = int(math.ceil(amount / product["maxProductionLimit"]))
-        add_material(result, copy_quantity, 10, product, element_copy, 0, False)
+        add_material(
+            result,
+            copy_quantity,
+            10,
+            product,
+            element_copy,
+            0,
+            False,
+            manufacturing_role_bonus=manufacturing_role_bonus,
+            manufacturing_rig_bonus=manufacturing_rig_bonus,
+            reaction_rig_bonus=reaction_rig_bonus,
+        )
         materials_job.append({"type": element_copy["material"], "quantity": copy_quantity})
 
     if product["activityId"] == 1:
@@ -327,6 +399,9 @@ async def get_blueprints_details(
     build_t1: bool,
     copy_bpo: bool,
     produce_fuel_blocks: bool,
+    manufacturing_role_bonus: float = 0.99,
+    manufacturing_rig_bonus: float = 0.958,
+    reaction_rig_bonus: float = 0.974,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {"jobs": [], "materials": [], "modules": []}
 
@@ -396,6 +471,9 @@ async def get_blueprints_details(
                     te,
                     copy_bpo,
                     produce_fuel_blocks,
+                    manufacturing_role_bonus,
+                    manufacturing_rig_bonus,
+                    reaction_rig_bonus,
                 )
 
     result.pop("modules", None)
@@ -410,6 +488,9 @@ async def get_blueprint_details(
     build_t1: bool,
     copy_bpo: bool,
     produce_fuel_blocks: bool,
+    manufacturing_role_bonus: float = 0.99,
+    manufacturing_rig_bonus: float = 0.958,
+    reaction_rig_bonus: float = 0.974,
 ) -> dict[str, Any]:
     return await get_blueprints_details(
         types=[{"typeId": int(type_id), "amount": int(amount)}],
@@ -417,6 +498,9 @@ async def get_blueprint_details(
         build_t1=build_t1,
         copy_bpo=copy_bpo,
         produce_fuel_blocks=produce_fuel_blocks,
+        manufacturing_role_bonus=manufacturing_role_bonus,
+        manufacturing_rig_bonus=manufacturing_rig_bonus,
+        reaction_rig_bonus=reaction_rig_bonus,
     )
 
 

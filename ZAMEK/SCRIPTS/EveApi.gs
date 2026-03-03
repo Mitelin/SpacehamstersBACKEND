@@ -1023,7 +1023,7 @@ globalThis.Eve = globalThis.Eve || (()=>{
         '&industryRig=' + industryRig + 
         '&reactionStructureType=' + reactionStructureType + 
         '&reactionRig=' + reactionRig +
-        '&reactionFlag=' + reactionFlag
+        '&reactionFlag=' + reactionFlag +
         '&blueprintVersion=' + blueprintVersion
 
       Logger.log(">>> URL: " + url);
