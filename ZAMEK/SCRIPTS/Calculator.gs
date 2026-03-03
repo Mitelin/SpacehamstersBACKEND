@@ -252,7 +252,7 @@ const Calculator = (() => {
     const order = [];
     if (preferred === 'buyTop5') order.push('buyTop5', 'splitTop5', 'sellTop5');
     else if (preferred === 'sellTop5') order.push('sellTop5', 'splitTop5', 'buyTop5');
-    else order.push('splitTop5', 'sellTop5', 'buyTop5');
+    else order.push('splitTop5', 'buyTop5', 'sellTop5');
 
     for (let i = 0; i < order.length; i++) {
       const mode = order[i];
@@ -865,14 +865,26 @@ const Calculator = (() => {
           if (Array.isArray(dbg.excess) && dbg.excess.length) {
             lines.push('--- excess (top by value) ---');
             dbg.excess.forEach(e => {
-              lines.push(e.type + ' qty=' + String(e.qty) + ' unit=' + formatIsk(e.unit) + ' value=' + formatIsk(e.value));
+              lines.push(
+                e.type +
+                ' qty=' + String(e.qty) +
+                ' unit=' + formatIsk(e.unit) +
+                ' mode=' + String(e.priceModeUsed || '') +
+                ' value=' + formatIsk(e.value)
+              );
             });
           }
 
           if (Array.isArray(dbg.materials) && dbg.materials.length) {
             lines.push('--- materials (top by cost) ---');
             dbg.materials.forEach(m => {
-              lines.push(m.type + ' qty=' + String(m.qty) + ' unit=' + formatIsk(m.unit) + ' cost=' + formatIsk(m.cost));
+              lines.push(
+                m.type +
+                ' qty=' + String(m.qty) +
+                ' unit=' + formatIsk(m.unit) +
+                ' mode=' + String(m.priceModeUsed || '') +
+                ' cost=' + formatIsk(m.cost)
+              );
             });
           }
 
