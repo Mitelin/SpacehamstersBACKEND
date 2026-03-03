@@ -441,12 +441,12 @@ const Calculator = (() => {
     return { perUnit, debug: null };
   };
 
-  const fetchBuildCosts = (blueprintTypeIds, systemName) => {
+  const fetchBuildCosts = (blueprintTypeIds, systemName, priceMode) => {
     // Matches the defaults used in Blueprints.updateBuildCosts()
     return Eve.getBuildCosts(
       blueprintTypeIds,
       1, // quantity
-      'sell',
+      priceMode || 'sell',
       0, // additionalCosts
       10, // baseMe
       10, // componentsMe
@@ -537,8 +537,17 @@ const Calculator = (() => {
         for (let start = 0; start < blueprintIds.length; start += BATCH) {
           const batchIds = blueprintIds.slice(start, start + BATCH);
           let data;
+          let dataBuy = null;
           try {
-            data = fetchBuildCosts(batchIds, systemName);
+            data = fetchBuildCosts(batchIds, systemName, 'sell');
+            // Debug-only: also fetch buy-mode so we can prove/disprove the "Cookbook always uses buy" hypothesis.
+            if (debug) {
+              try {
+                dataBuy = fetchBuildCosts(batchIds, systemName, 'buy');
+              } catch (e2) {
+                dataBuy = null;
+              }
+            }
           } catch (e) {
             if (debug) {
               batchIds.forEach(id => {
@@ -557,6 +566,25 @@ const Calculator = (() => {
               });
             }
             continue;
+          }
+
+          // Build lookup for buy-mode response (debug only)
+          const buyByBlueprintId = new Map();
+          if (debug && Array.isArray(dataBuy)) {
+            dataBuy.forEach(entry => {
+              if (!entry) return;
+              const status = (typeof entry.status === 'string') ? Number(entry.status) : entry.status;
+              if (status !== 200) return;
+              const msg = entry.message;
+              if (!msg) return;
+              const bpId =
+                msg.blueprintTypeId ??
+                msg.blueprintTypeID ??
+                msg.blueprint_type_id ??
+                msg.blueprintTypeid;
+              if (bpId == null) return;
+              buyByBlueprintId.set(String(bpId), msg);
+            });
           }
 
           data.forEach(entry => {
@@ -598,6 +626,18 @@ const Calculator = (() => {
               if (message.excessMaterialsValue != null) noteLines.push('excessMaterialsValue: ' + formatIsk(message.excessMaterialsValue));
               if (message.totalCost != null) noteLines.push('totalCost: ' + formatIsk(message.totalCost));
               noteLines.push('buildCostPerUnit: ' + formatIsk(cost));
+
+              // If we managed to fetch buy-mode too, print it for comparison.
+              const buyMsg = buyByBlueprintId.get(String(blueprintTypeId));
+              if (buyMsg) {
+                noteLines.push('--- cookbook buy-mode (debug) ---');
+                if (buyMsg.materialCost != null) noteLines.push('materialCost(buy): ' + formatIsk(buyMsg.materialCost));
+                if (buyMsg.jobCost != null) noteLines.push('jobCost(buy): ' + formatIsk(buyMsg.jobCost));
+                if (buyMsg.excessMaterialsValue != null) noteLines.push('excessMaterialsValue(buy): ' + formatIsk(buyMsg.excessMaterialsValue));
+                if (buyMsg.totalCost != null) noteLines.push('totalCost(buy): ' + formatIsk(buyMsg.totalCost));
+                if (buyMsg.buildCostPerUnit != null) noteLines.push('buildCostPerUnit(buy): ' + formatIsk(buyMsg.buildCostPerUnit));
+              }
+
               noteLines.push('--- request params ---');
               noteLines.push('system: ' + systemName);
               noteLines.push('priceMode: sell');
