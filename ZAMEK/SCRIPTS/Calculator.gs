@@ -309,6 +309,22 @@ const Calculator = (() => {
     const facilityTaxRate = (Number(facility.facilityTax) || 0) / 100.0;
     const multipliers = resolveMaterialMultipliers(facility);
 
+    // Some backend datasets may include intermediate items in `data.materials` with `isInput=true`.
+    // For parity with Cookbook (and to avoid double-counting), treat any type produced by a job in the
+    // chain (excluding the final requested output) as an intermediate and do not price it as an
+    // external market input.
+    const jobsAll = Array.isArray(data.jobs) ? data.jobs : [];
+    const producedTypes = new Set();
+    for (let j = 0; j < jobsAll.length; j++) {
+      const job = jobsAll[j];
+      if (!job) continue;
+      if (Number(job.level) === 1) continue;
+      const product = job.product;
+      if (!product) continue;
+      if (String(product).endsWith('Blueprint')) continue;
+      producedTypes.add(String(product));
+    }
+
     const dbg = debug ? {
       blueprintTypeId,
       system: {
@@ -322,9 +338,11 @@ const Calculator = (() => {
       materials: [],
       excess: [],
       jobs: [],
+      skippedIntermediateInputs: [],
       materialCostGross: 0,
       materialCostBuyTop5: 0,
       materialCostSplitTop5: 0,
+      skippedIntermediateInputsCost: 0,
       excessMaterialsValue: 0,
       materialCost: 0,
       materialCostNetIfSellExcess: 0,
@@ -337,6 +355,7 @@ const Calculator = (() => {
     let materialCostGross = 0;
     let materialCostBuyTop5 = 0;
     let materialCostSplitTop5 = 0;
+    let skippedIntermediateInputsCost = 0;
     const materials = Array.isArray(data.materials) ? data.materials : [];
     const inputs = materials.filter(m => m && m.isInput);
     for (let i = 0; i < inputs.length; i++) {
@@ -346,6 +365,20 @@ const Calculator = (() => {
       if (!name || isNaN(qty) || qty <= 0) continue;
       // Blueprint "materials" can show up in some datasets; they are not priced market inputs.
       if (String(name).endsWith('Blueprint')) continue;
+
+      // If this type is produced inside the chain, do not treat it as an external input.
+      if (producedTypes.has(String(name))) {
+        if (dbg) {
+          const priced = priceMaterialInternalDetailed(name);
+          if (priced && priced.unit != null) {
+            const cost = qty * priced.unit;
+            skippedIntermediateInputsCost += cost;
+            dbg.skippedIntermediateInputs.push({ type: name, qty, unit: priced.unit, priceModeUsed: priced.modeUsed, cost });
+          }
+        }
+        continue;
+      }
+
       const priced = priceMaterialInternalDetailed(name);
       if (!priced || priced.unit == null) {
         if (dbg) dbg.missingPrices.push({ type: name, price: 'material:' + INTERNAL_MATERIAL_PRICE_MODE });
@@ -373,7 +406,6 @@ const Calculator = (() => {
     {
       const producedByType = new Map();
       const consumedByType = new Map();
-      const jobsAll = Array.isArray(data.jobs) ? data.jobs : [];
 
       const addMap = (m, k, v) => {
         if (!k || isNaN(v) || v === 0) return;
@@ -517,11 +549,19 @@ const Calculator = (() => {
       dbg.materialCostGross = materialCostGross;
       dbg.materialCostBuyTop5 = materialCostBuyTop5;
       dbg.materialCostSplitTop5 = materialCostSplitTop5;
+      dbg.skippedIntermediateInputsCost = skippedIntermediateInputsCost;
       dbg.excessMaterialsValue = excessMaterialsValue;
       dbg.materialCost = materialCost;
       dbg.materialCostNetIfSellExcess = materialCostNetIfSellExcess;
       dbg.jobCost = jobCost;
       dbg.producedQuantity = producedQty;
+
+      if (Array.isArray(dbg.skippedIntermediateInputs) && dbg.skippedIntermediateInputs.length) {
+        dbg.skippedIntermediateInputs.sort((a, b) => Number(b.cost) - Number(a.cost));
+        if (dbg.skippedIntermediateInputs.length > MAX_DEBUG_MATERIAL_LINES) {
+          dbg.skippedIntermediateInputs = dbg.skippedIntermediateInputs.slice(0, MAX_DEBUG_MATERIAL_LINES);
+        }
+      }
 
       // Sort material lines by cost desc and trim.
       dbg.materials.sort((a, b) => Number(b.cost) - Number(a.cost));
@@ -825,6 +865,7 @@ const Calculator = (() => {
           if (dbg.materialCost != null) lines.push('materialCost: ' + formatIsk(dbg.materialCost));
           if (dbg.materialCostBuyTop5 != null) lines.push('materialCost(buyTop5, internal debug): ' + formatIsk(dbg.materialCostBuyTop5));
           if (dbg.materialCostSplitTop5 != null) lines.push('materialCost(splitTop5, internal debug): ' + formatIsk(dbg.materialCostSplitTop5));
+          if (dbg.skippedIntermediateInputsCost != null) lines.push('skippedIntermediateInputsCost: ' + formatIsk(dbg.skippedIntermediateInputsCost));
           if (dbg.excessMaterialsValue != null) lines.push('excessMaterialsValue: ' + formatIsk(dbg.excessMaterialsValue));
           if (dbg.materialCostNetIfSellExcess != null) lines.push('materialCostNetIfSellExcess: ' + formatIsk(dbg.materialCostNetIfSellExcess));
           lines.push('jobCost: ' + formatIsk(dbg.jobCost));
@@ -871,6 +912,19 @@ const Calculator = (() => {
                 ' unit=' + formatIsk(e.unit) +
                 ' mode=' + String(e.priceModeUsed || '') +
                 ' value=' + formatIsk(e.value)
+              );
+            });
+          }
+
+          if (Array.isArray(dbg.skippedIntermediateInputs) && dbg.skippedIntermediateInputs.length) {
+            lines.push('--- skipped intermediate inputs (top by cost) ---');
+            dbg.skippedIntermediateInputs.forEach(m => {
+              lines.push(
+                m.type +
+                ' qty=' + String(m.qty) +
+                ' unit=' + formatIsk(m.unit) +
+                ' mode=' + String(m.priceModeUsed || '') +
+                ' cost=' + formatIsk(m.cost)
               );
             });
           }
