@@ -13,7 +13,7 @@ function onOpen() {
       .addItem('Industry Jobs', 'syncIndustryJobs')
       .addItem('Assets', 'syncAssets'))
     .addSeparator()
-//    .addItem('Načíst: Ceník (Marketeer)', 'getPricesMarketeer')
+    .addItem('Načíst: Ceník (Marketeer)', 'getPricesMarketeer')
     .addItem('Načíst: Ceník (Tycoon)', 'getPricesTycoon')
     .addItem('Spočítat: Výkupní ceny Ore a Modulů', 'pricelistCalculateOre')
     .addItem('Spočítat: Objemy nákupu a prodeje', 'pricelistGetVolumes')

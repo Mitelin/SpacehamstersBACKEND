@@ -6,6 +6,7 @@ const Calculator = (() => {
   const COL_ITEM = 1; // A
   const COL_COST = 2; // B
   const COL_COOKBOOK = 3; // C
+  const COL_EXCESS_VALUE = 4; // D
 
   const FONT_OK = '#000000';
   const FONT_ERR = '#ff0000';
@@ -20,13 +21,35 @@ const Calculator = (() => {
 
   // Align with Cookbook defaults for comparisons.
   const DEFAULT_ME_T1 = 10;
-  const DEFAULT_TE_T1 = 10;
-  const DEFAULT_ME_T2 = 10;
-  const DEFAULT_TE_T2 = 10;
+  // TE does not affect our cost model directly (we don't price time), but keep realistic max values.
+  const DEFAULT_TE_T1 = 20;
 
-  // Internal material pricing mode. Cookbook's `priceMode=sell` tracks our `jitaSplitTop5` very closely.
+  // Sub-components: keep max research (ME 10 / TE 20).
+  const DEFAULT_ME_T2 = 10;
+  const DEFAULT_TE_T2 = 20;
+
+  // T2 final product (invented BPC) requested defaults.
+  const FINAL_T2_ME = 0;
+  const FINAL_T2_TE = 0;
+
+  // Internal material pricing mode.
+  // Cookbook `priceMode=sell` is closer to an orderbook-wide sell price than to a cheap "top5%" slice.
+  // Prefer `sellWavg` when available; fall back safely.
   // Keep configurable for future calibration.
-  const INTERNAL_MATERIAL_PRICE_MODE = 'splitTop5'; // 'sellTop5' | 'buyTop5' | 'splitTop5'
+  const INTERNAL_MATERIAL_PRICE_MODE = 'sellWavg'; // 'sellWavg' | 'sellAvg' | 'sellTop5' | 'buyWavg' | 'buyAvg' | 'buyTop5' | 'splitTop5'
+
+  const chooseInternalMaterialPriceMode = (hasInventionJob) => {
+    // Parity heuristic:
+    // - T2 trees include invention (and often reactions): sellWavg matches Cookbook sell better.
+    // - T1-only trees: sellWavg from aggregates can overshoot; sellTop5 is more stable.
+    return hasInventionJob ? 'sellWavg' : 'sellTop5';
+  };
+
+  // Backend chain expansion behavior.
+  // `mergeModules=true` merges identical queued modules before expanding the chain.
+  // This avoids runaway rounding/overbuild (especially in reaction-heavy T2 trees) and is the
+  // most stable baseline across T1/T2.
+  const INTERNAL_MERGE_MODULES = true;
 
   const MAX_DEBUG_MATERIAL_LINES = 30;
   const MAX_DEBUG_JOB_LINES = 30;
@@ -113,7 +136,7 @@ const Calculator = (() => {
 
   const clearNotes = (sheet) => {
     // Notes are used only for debug mode; clear them so stale info doesn't stick.
-    sheet.getRange(START_ROW, COL_ITEM, ROW_COUNT, 3).clearNote();
+    sheet.getRange(START_ROW, COL_ITEM, ROW_COUNT, 4).clearNote();
   };
 
   const markRowError = (sheet, rowIndex0) => {
@@ -158,6 +181,37 @@ const Calculator = (() => {
     return n.toFixed(2);
   };
 
+  const toNumberLoose = (v) => {
+    // Sheets can return numbers as locale-formatted strings (e.g. "123 456,78").
+    // Parse robustly so missing/NaN doesn't accidentally force a fallback price mode.
+    if (v == null) return NaN;
+    if (typeof v === 'number') return isFinite(v) ? v : NaN;
+    let s = String(v).trim();
+    if (!s) return NaN;
+
+    // Remove spaces (incl NBSP) used as thousand separators.
+    s = s.replace(/[\s\u00A0]/g, '');
+
+    // If both separators are present, infer which is decimal by last occurrence.
+    const hasComma = s.indexOf(',') !== -1;
+    const hasDot = s.indexOf('.') !== -1;
+    if (hasComma && hasDot) {
+      if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
+        // "1.234,56" -> "1234.56"
+        s = s.replace(/\./g, '').replace(',', '.');
+      } else {
+        // "1,234.56" -> "1234.56"
+        s = s.replace(/,/g, '');
+      }
+    } else if (hasComma && !hasDot) {
+      // "1234,56" -> "1234.56"
+      s = s.replace(',', '.');
+    }
+
+    const n = Number(s);
+    return isNaN(n) ? NaN : n;
+  };
+
   const getSystemIdByName = (systemName) => {
     const data = Eve.resolveNames([systemName], 'systems');
     if (!data || !data[0] || !data[0].id) throw ('System nenalezen: ' + systemName);
@@ -177,24 +231,68 @@ const Calculator = (() => {
     return map;
   };
 
-  const fetchBlueprintCalculation = (blueprintTypeId) => {
+  const stripBlueprintSuffix = (name) => {
+    const s = normalizeName(name);
+    if (!s) return '';
+    return s.replace(/\s+Blueprint\s*$/i, '').trim();
+  };
+
+  const inferFinalIsShipFromInput = (rawInput) => {
+    // Best-effort heuristic: resolve the PRODUCT type (not the blueprint) and check its category.
+    // If we fail, default to module-like behavior.
+    const raw = normalizeName(rawInput);
+    if (!raw) return false;
+
+    const base = [];
+    base.push(stripBlueprintSuffix(raw));
+    if (raw === raw.toLowerCase()) base.push(stripBlueprintSuffix(toTitleCaseSimple(raw)));
+
+    const seen = new Set();
+    for (let i = 0; i < base.length; i++) {
+      const candidate = normalizeName(base[i]);
+      if (!candidate || seen.has(candidate)) continue;
+      seen.add(candidate);
+      try {
+        const t = Universe.searchType(candidate);
+        if (t && t.type_id) {
+          const full = Universe.getType(Number(t.type_id));
+          const cat = String((full && full.category_name) || '').toLowerCase();
+          return cat === 'ship';
+        }
+      } catch (e) {
+        // try next
+      }
+    }
+
+    return false;
+  };
+
+  const fetchBlueprintCalculation = (blueprintTypeId, finalIsShip) => {
     // Minimal request compatible with Blueprints.calculateBlueprints() endpoint.
     const facility = getDefaultFacilityConfig();
+
+    // Apply T2 final-product 0/0 to the correct bucket (ship vs module).
+    // Keep everything else at "max" (10/20).
+    const t2ShipME = finalIsShip ? FINAL_T2_ME : DEFAULT_ME_T2;
+    const t2ShipTE = finalIsShip ? FINAL_T2_TE : DEFAULT_TE_T2;
+    const t2ModuleME = finalIsShip ? DEFAULT_ME_T2 : FINAL_T2_ME;
+    const t2ModuleTE = finalIsShip ? DEFAULT_TE_T2 : FINAL_T2_TE;
+
     const req = {
       types: [{ typeId: blueprintTypeId, amount: 1 }],
 
       // Backend optional: merge identical queued modules before expanding the chain.
       // This reduces rounding-driven overbuild for complex T2 trees.
-      mergeModules: true,
+      mergeModules: INTERNAL_MERGE_MODULES,
 
       shipT1ME: DEFAULT_ME_T1,
       shipT1TE: DEFAULT_TE_T1,
-      shipT2ME: DEFAULT_ME_T2,
-      shipT2TE: DEFAULT_TE_T2,
+      shipT2ME: t2ShipME,
+      shipT2TE: t2ShipTE,
       moduleT1ME: DEFAULT_ME_T1,
       moduleT1TE: DEFAULT_TE_T1,
-      moduleT2ME: DEFAULT_ME_T2,
-      moduleT2TE: DEFAULT_TE_T2,
+      moduleT2ME: t2ModuleME,
+      moduleT2TE: t2ModuleTE,
       produceFuelBlocks: false,
       buildT1: false,
       copyBPO: false,
@@ -224,45 +322,81 @@ const Calculator = (() => {
 
   const priceSell = (typeName) => {
     const p = priceList.getPrice(typeName);
-    const v = p ? Number(p.jitaSellTop5) : NaN;
+    const v = p ? toNumberLoose(p.jitaSellTop5) : NaN;
+    if (isNaN(v) || v <= 0) return null;
+    return v;
+  };
+
+  const priceSellWavg = (typeName) => {
+    const p = priceList.getPrice(typeName);
+    const v = p ? toNumberLoose(p.jitaSellWavg) : NaN;
+    if (isNaN(v) || v <= 0) return null;
+    return v;
+  };
+
+  const priceSellAvg = (typeName) => {
+    const p = priceList.getPrice(typeName);
+    const v = p ? toNumberLoose(p.jitaSellAvg) : NaN;
     if (isNaN(v) || v <= 0) return null;
     return v;
   };
 
   const priceBuy = (typeName) => {
     const p = priceList.getPrice(typeName);
-    const v = p ? Number(p.jitaBuyTop5) : NaN;
+    const v = p ? toNumberLoose(p.jitaBuyTop5) : NaN;
+    if (isNaN(v) || v <= 0) return null;
+    return v;
+  };
+
+  const priceBuyWavg = (typeName) => {
+    const p = priceList.getPrice(typeName);
+    const v = p ? toNumberLoose(p.jitaBuyWavg) : NaN;
+    if (isNaN(v) || v <= 0) return null;
+    return v;
+  };
+
+  const priceBuyAvg = (typeName) => {
+    const p = priceList.getPrice(typeName);
+    const v = p ? toNumberLoose(p.jitaBuyAvg) : NaN;
     if (isNaN(v) || v <= 0) return null;
     return v;
   };
 
   const priceSplit = (typeName) => {
     const p = priceList.getPrice(typeName);
-    const v = p ? Number(p.jitaSplitTop5) : NaN;
+    const v = p ? toNumberLoose(p.jitaSplitTop5) : NaN;
     if (isNaN(v) || v <= 0) return null;
     return v;
   };
 
-  const priceMaterialInternal = (typeName) => {
+  const priceMaterialInternal = (typeName, preferredModeOverride) => {
     // Backward-compatible: return just the numeric unit price.
-    const res = priceMaterialInternalDetailed(typeName);
+    const res = priceMaterialInternalDetailed(typeName, preferredModeOverride);
     return res ? res.unit : null;
   };
 
-  const priceMaterialInternalDetailed = (typeName) => {
+  const priceMaterialInternalDetailed = (typeName, preferredModeOverride) => {
     // Some items may be missing in one feed (e.g. splitTop5) but present in others.
     // For internal calculations we prefer INTERNAL_MATERIAL_PRICE_MODE but fall back
     // to other feeds to avoid failing whole rows.
-    const preferred = String(INTERNAL_MATERIAL_PRICE_MODE || '').trim();
+    const preferred = String((preferredModeOverride != null ? preferredModeOverride : INTERNAL_MATERIAL_PRICE_MODE) || '').trim();
     const order = [];
-    if (preferred === 'buyTop5') order.push('buyTop5', 'splitTop5', 'sellTop5');
-    else if (preferred === 'sellTop5') order.push('sellTop5', 'splitTop5', 'buyTop5');
-    else order.push('splitTop5', 'buyTop5', 'sellTop5');
+    if (preferred === 'buyWavg') order.push('buyWavg', 'buyAvg', 'buyTop5', 'splitTop5', 'sellWavg', 'sellAvg', 'sellTop5');
+    else if (preferred === 'buyAvg') order.push('buyAvg', 'buyWavg', 'buyTop5', 'splitTop5', 'sellWavg', 'sellAvg', 'sellTop5');
+    else if (preferred === 'buyTop5') order.push('buyTop5', 'splitTop5', 'sellWavg', 'sellAvg', 'sellTop5');
+    else if (preferred === 'sellWavg') order.push('sellWavg', 'sellAvg', 'sellTop5', 'splitTop5', 'buyWavg', 'buyAvg', 'buyTop5');
+    else if (preferred === 'sellAvg') order.push('sellAvg', 'sellWavg', 'sellTop5', 'splitTop5', 'buyWavg', 'buyAvg', 'buyTop5');
+    else if (preferred === 'sellTop5') order.push('sellTop5', 'splitTop5', 'buyWavg', 'buyAvg', 'buyTop5');
+    else order.push('splitTop5', 'sellWavg', 'sellAvg', 'sellTop5', 'buyWavg', 'buyAvg', 'buyTop5');
 
     for (let i = 0; i < order.length; i++) {
       const mode = order[i];
       let unit = null;
-      if (mode === 'buyTop5') unit = priceBuy(typeName);
+      if (mode === 'buyWavg') unit = priceBuyWavg(typeName);
+      else if (mode === 'buyAvg') unit = priceBuyAvg(typeName);
+      else if (mode === 'buyTop5') unit = priceBuy(typeName);
+      else if (mode === 'sellWavg') unit = priceSellWavg(typeName);
+      else if (mode === 'sellAvg') unit = priceSellAvg(typeName);
       else if (mode === 'sellTop5') unit = priceSell(typeName);
       else unit = priceSplit(typeName);
       if (unit != null) return { unit, modeUsed: mode, preferredMode: preferred || 'splitTop5' };
@@ -294,7 +428,7 @@ const Calculator = (() => {
 
   const priceAdjusted = (typeName) => {
     const p = priceList.getPrice(typeName);
-    const v = p ? Number(p.eveAdjusted) : NaN;
+    const v = p ? toNumberLoose(p.eveAdjusted) : NaN;
     if (isNaN(v) || v <= 0) return null;
     return v;
   };
@@ -308,8 +442,8 @@ const Calculator = (() => {
     return '';
   };
 
-  const computeInternalBuildCostPerUnit = (blueprintTypeId, systemCostIndexByActivity, debug) => {
-    const data = fetchBlueprintCalculation(blueprintTypeId);
+  const computeInternalBuildCostPerUnit = (blueprintTypeId, systemCostIndexByActivity, debug, finalIsShip) => {
+    const data = fetchBlueprintCalculation(blueprintTypeId, !!finalIsShip);
     const facility = getDefaultFacilityConfig();
     const facilityTaxRate = (Number(facility.facilityTax) || 0) / 100.0;
     const multipliers = resolveMaterialMultipliers(facility);
@@ -319,6 +453,8 @@ const Calculator = (() => {
     // chain (excluding the final requested output) as an intermediate and do not price it as an
     // external market input.
     const jobsAll = Array.isArray(data.jobs) ? data.jobs : [];
+    const hasInventionJob = jobsAll.some(j => j && String(j.type || '').toLowerCase() === 'invention');
+    const preferredMaterialPriceMode = chooseInternalMaterialPriceMode(hasInventionJob);
     const producedTypes = new Set();
     for (let j = 0; j < jobsAll.length; j++) {
       const job = jobsAll[j];
@@ -333,6 +469,9 @@ const Calculator = (() => {
     const dbg = debug ? {
       blueprintTypeId,
       backendMeta: (data && data.meta) ? data.meta : null,
+      hasInventionJob,
+      preferredMaterialPriceMode,
+      finalIsShip: !!finalIsShip,
       system: {
         name: getDefaultSystemName(),
         costIndexManufacturing: systemCostIndexByActivity ? systemCostIndexByActivity.get('manufacturing') : null,
@@ -341,13 +480,19 @@ const Calculator = (() => {
       facility,
       sccSurchargeRate: SCC_SURCHARGE_RATE,
       missingPrices: [],
+      materialInputPriceModeCounts: {},
       materials: [],
       excess: [],
       jobs: [],
       skippedIntermediateInputs: [],
       materialCostGross: 0,
+      materialCostBuyWavg: 0,
+      materialCostBuyAvg: 0,
       materialCostBuyTop5: 0,
       materialCostSplitTop5: 0,
+      materialCostSellWavg: 0,
+      materialCostSellAvg: 0,
+      materialCostSellTop5: 0,
       skippedIntermediateInputsCost: 0,
       excessMaterialsValue: 0,
       materialCost: 0,
@@ -359,8 +504,13 @@ const Calculator = (() => {
     // 1) Material cost (gross): use TOTAL INPUT materials (across the whole chain)
     // and price them by our pricelist (Cookbook sell-mode matches our splitTop5 closely).
     let materialCostGross = 0;
+    let materialCostBuyWavg = 0;
+    let materialCostBuyAvg = 0;
     let materialCostBuyTop5 = 0;
     let materialCostSplitTop5 = 0;
+    let materialCostSellWavg = 0;
+    let materialCostSellAvg = 0;
+    let materialCostSellTop5 = 0;
     let skippedIntermediateInputsCost = 0;
     const materials = Array.isArray(data.materials) ? data.materials : [];
     const inputs = materials.filter(m => m && m.isInput);
@@ -375,7 +525,7 @@ const Calculator = (() => {
       // If this type is produced inside the chain, do not treat it as an external input.
       if (producedTypes.has(String(name))) {
         if (dbg) {
-          const priced = priceMaterialInternalDetailed(name);
+          const priced = priceMaterialInternalDetailed(name, preferredMaterialPriceMode);
           if (priced && priced.unit != null) {
             const cost = qty * priced.unit;
             skippedIntermediateInputsCost += cost;
@@ -385,19 +535,34 @@ const Calculator = (() => {
         continue;
       }
 
-      const priced = priceMaterialInternalDetailed(name);
+      const priced = priceMaterialInternalDetailed(name, preferredMaterialPriceMode);
       if (!priced || priced.unit == null) {
-        if (dbg) dbg.missingPrices.push({ type: name, price: 'material:' + INTERNAL_MATERIAL_PRICE_MODE });
-        throw ('Chybí cena (material:' + INTERNAL_MATERIAL_PRICE_MODE + ') pro: ' + name);
+        if (dbg) dbg.missingPrices.push({ type: name, price: 'material:' + preferredMaterialPriceMode });
+        throw ('Chybí cena (material:' + preferredMaterialPriceMode + ') pro: ' + name);
+      }
+
+      if (dbg && priced.modeUsed) {
+        const k = String(priced.modeUsed);
+        dbg.materialInputPriceModeCounts[k] = (Number(dbg.materialInputPriceModeCounts[k]) || 0) + 1;
       }
       materialCostGross += qty * priced.unit;
 
       // Debug-only: alternate price modes for explaining deltas.
       if (dbg) {
+        const ubw = priceBuyWavg(name);
+        if (ubw != null) materialCostBuyWavg += qty * ubw;
+        const uba = priceBuyAvg(name);
+        if (uba != null) materialCostBuyAvg += qty * uba;
         const ub = priceBuy(name);
         if (ub != null) materialCostBuyTop5 += qty * ub;
         const us = priceSplit(name);
         if (us != null) materialCostSplitTop5 += qty * us;
+        const uSellW = priceSellWavg(name);
+        if (uSellW != null) materialCostSellWavg += qty * uSellW;
+        const uSellA = priceSellAvg(name);
+        if (uSellA != null) materialCostSellAvg += qty * uSellA;
+        const uSell = priceSell(name);
+        if (uSell != null) materialCostSellTop5 += qty * uSell;
       }
 
       if (dbg) {
@@ -458,7 +623,7 @@ const Calculator = (() => {
         const consumedQty = Number(consumedByType.get(typeName)) || 0;
         const excessQty = producedQty - consumedQty;
         if (excessQty <= 0) return;
-        const priced = priceMaterialInternalDetailed(typeName);
+        const priced = priceMaterialInternalDetailed(typeName, preferredMaterialPriceMode);
         if (!priced || priced.unit == null) return;
         const value = excessQty * priced.unit;
         if (value <= 0) return;
@@ -550,11 +715,17 @@ const Calculator = (() => {
 
     const producedQty = produced > 0 ? produced : 1;
     const perUnit = (materialCost + jobCost) / producedQty;
+    const excessValuePerUnit = excessMaterialsValue / producedQty;
 
     if (dbg) {
       dbg.materialCostGross = materialCostGross;
+      dbg.materialCostBuyWavg = materialCostBuyWavg;
+      dbg.materialCostBuyAvg = materialCostBuyAvg;
       dbg.materialCostBuyTop5 = materialCostBuyTop5;
       dbg.materialCostSplitTop5 = materialCostSplitTop5;
+      dbg.materialCostSellWavg = materialCostSellWavg;
+      dbg.materialCostSellAvg = materialCostSellAvg;
+      dbg.materialCostSellTop5 = materialCostSellTop5;
       dbg.skippedIntermediateInputsCost = skippedIntermediateInputsCost;
       dbg.excessMaterialsValue = excessMaterialsValue;
       dbg.materialCost = materialCost;
@@ -580,21 +751,21 @@ const Calculator = (() => {
         dbg.jobs = dbg.jobs.slice(0, MAX_DEBUG_JOB_LINES);
       }
 
-      return { perUnit, debug: dbg };
+      return { perUnit, excessValuePerUnit, debug: dbg, meta: { hasInventionJob, producedQty, excessMaterialsValue } };
     }
 
-    return { perUnit, debug: null };
+    return { perUnit, excessValuePerUnit, debug: null, meta: { hasInventionJob, producedQty, excessMaterialsValue } };
   };
 
-  const fetchBuildCosts = (blueprintTypeIds, systemName, priceMode) => {
+  const fetchBuildCosts = (blueprintTypeIds, systemName, priceMode, baseMe, componentsMe) => {
     // Matches the defaults used in Blueprints.updateBuildCosts()
     return Eve.getBuildCosts(
       blueprintTypeIds,
       1, // quantity
       priceMode || 'sell',
       0, // additionalCosts
-      10, // baseMe
-      10, // componentsMe
+      (baseMe == null ? DEFAULT_ME_T1 : baseMe), // baseMe
+      (componentsMe == null ? DEFAULT_ME_T1 : componentsMe), // componentsMe
       systemName,
       0, // facilityTax
       'Sotiyo',
@@ -618,11 +789,13 @@ const Calculator = (() => {
       // Reset formatting first so old errors disappear
       setAllOkFormatting(sheet);
 
-      if (debug) clearNotes(sheet);
+      // Always clear old debug notes (even in non-debug runs).
+      clearNotes(sheet);
 
       // Prepare outputs
       const outCosts = Array.from({ length: ROW_COUNT }, () => ['']);
       const outCookbook = Array.from({ length: ROW_COUNT }, () => ['']);
+      const outExcess = Array.from({ length: ROW_COUNT }, () => ['']);
 
       // Row-level debug blobs (only used when debug=true)
       const rowDebug = debug ? new Array(ROW_COUNT).fill(null) : null;
@@ -630,6 +803,7 @@ const Calculator = (() => {
       // Resolve blueprintTypeIds; keep mapping to row indexes
       const blueprintIds = [];
       const rowByBlueprintId = new Map();
+      const finalIsShipByBlueprintId = new Map();
 
       for (let i = 0; i < names.length; i++) {
         const name = names[i];
@@ -648,6 +822,7 @@ const Calculator = (() => {
           if (!rowByBlueprintId.has(key)) {
             rowByBlueprintId.set(key, []);
             blueprintIds.push(blueprintTypeId);
+            finalIsShipByBlueprintId.set(key, inferFinalIsShipFromInput(name));
           }
           rowByBlueprintId.get(key).push(i);
         } catch (e) {
@@ -660,6 +835,7 @@ const Calculator = (() => {
         // Nothing to do; still clear old outputs
         sheet.getRange(START_ROW, COL_COST, ROW_COUNT, 1).setValues(outCosts);
         sheet.getRange(START_ROW, COL_COOKBOOK, ROW_COUNT, 1).setValues(outCookbook);
+        sheet.getRange(START_ROW, COL_EXCESS_VALUE, ROW_COUNT, 1).setValues(outExcess);
         return;
       }
 
@@ -675,45 +851,215 @@ const Calculator = (() => {
         systemCostIndexByActivity = getCostIndexMapForSystem(systemId);
       }
 
+      if (CALC_MODE !== 'cookbook') {
+        // INTERNAL mode: compute per blueprint (cached for duplicates).
+        const costCache = new Map();
+        const excessPerUnitCache = new Map();
+        const debugCache = debug ? new Map() : null;
+        const hintCache = new Map(); // blueprintTypeId -> {hasInventionJob}
+        for (let i = 0; i < blueprintIds.length; i++) {
+          const id = blueprintIds[i];
+          const key = String(id);
+          let cost = costCache.get(key);
+          if (cost == null) {
+            try {
+              const res = computeInternalBuildCostPerUnit(
+                id,
+                systemCostIndexByActivity,
+                debug,
+                finalIsShipByBlueprintId.get(key)
+              );
+              cost = res.perUnit;
+              costCache.set(key, cost);
+              excessPerUnitCache.set(key, (res && typeof res.excessValuePerUnit === 'number' && isFinite(res.excessValuePerUnit)) ? res.excessValuePerUnit : null);
+              if (debug && res.debug) debugCache.set(key, res.debug);
+              if (res && res.meta) hintCache.set(key, res.meta);
+            } catch (e) {
+              try { console.log('Calculator internal error for blueprintTypeId=' + id + ':', e); } catch (ee) {}
+              costCache.set(key, null);
+              excessPerUnitCache.set(key, null);
+              if (debug) debugCache.set(key, { blueprintTypeId: id, error: String(e), facility: getDefaultFacilityConfig(), system: { name: getDefaultSystemName() } });
+              hintCache.set(key, { hasInventionJob: false });
+            }
+          }
+
+          const rows = rowByBlueprintId.get(key) || [];
+          rows.forEach(r => {
+            if (cost != null) outCosts[r][0] = cost;
+            const excessPerUnit = excessPerUnitCache.get(key);
+            if (excessPerUnit != null) outExcess[r][0] = excessPerUnit;
+            if (debug) rowDebug[r] = debugCache.get(key) || null;
+          });
+        }
+
+        // Cookbook comparison: use per-blueprint ME defaults.
+        // - T1 items: baseMe=DEFAULT_ME_T1
+        // - T2 items (detected by presence of invention job in the backend chain): baseMe=FINAL_T2_ME (requested 0)
+        // Components are generally T1-manufactured, so keep componentsMe at DEFAULT_ME_T1.
+        {
+          const groupIds = new Map(); // baseMe -> [ids]
+          for (let i = 0; i < blueprintIds.length; i++) {
+            const id = blueprintIds[i];
+            const key = String(id);
+            const hint = hintCache.get(key);
+            const baseMe = (hint && hint.hasInventionJob) ? FINAL_T2_ME : DEFAULT_ME_T1;
+            const k = String(baseMe);
+            if (!groupIds.has(k)) groupIds.set(k, []);
+            groupIds.get(k).push(id);
+          }
+
+          const BATCH = 20;
+          const componentsMe = DEFAULT_ME_T1;
+          for (const [baseMeKey, ids] of groupIds.entries()) {
+            const baseMe = Number(baseMeKey);
+            for (let start = 0; start < ids.length; start += BATCH) {
+              const batchIds = ids.slice(start, start + BATCH);
+              let data;
+              let dataBuy = null;
+              try {
+                data = fetchBuildCosts(batchIds, systemName, 'sell', baseMe, componentsMe);
+                if (debug) {
+                  try {
+                    dataBuy = fetchBuildCosts(batchIds, systemName, 'buy', baseMe, componentsMe);
+                  } catch (e2) {
+                    dataBuy = null;
+                  }
+                }
+              } catch (e) {
+                if (debug) {
+                  batchIds.forEach(id2 => {
+                    const rows = rowByBlueprintId.get(String(id2)) || [];
+                    rows.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, 'Cookbook error: ' + e));
+                  });
+                }
+                continue;
+              }
+
+              if (!Array.isArray(data)) {
+                if (debug) {
+                  batchIds.forEach(id2 => {
+                    const rows = rowByBlueprintId.get(String(id2)) || [];
+                    rows.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, 'Cookbook invalid response (not array)'));
+                  });
+                }
+                continue;
+              }
+
+              const buyByBlueprintId = new Map();
+              if (debug && Array.isArray(dataBuy)) {
+                dataBuy.forEach(entry => {
+                  if (!entry) return;
+                  const status = (typeof entry.status === 'string') ? Number(entry.status) : entry.status;
+                  if (status !== 200) return;
+                  const msg = entry.message;
+                  if (!msg) return;
+                  const bpId =
+                    msg.blueprintTypeId ??
+                    msg.blueprintTypeID ??
+                    msg.blueprint_type_id ??
+                    msg.blueprintTypeid;
+                  if (bpId == null) return;
+                  buyByBlueprintId.set(String(bpId), msg);
+                });
+              }
+
+              data.forEach(entry => {
+                if (!entry) return;
+                const status = (typeof entry.status === 'string') ? Number(entry.status) : entry.status;
+                const message = entry.message;
+
+                if (status !== 200) {
+                  if (debug && message && typeof message === 'object') {
+                    const bpIdErr = message.blueprintTypeId ?? message.blueprintTypeID ?? message.blueprint_type_id;
+                    if (bpIdErr != null) {
+                      const rowsErr = rowByBlueprintId.get(String(bpIdErr)) || [];
+                      rowsErr.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, 'Cookbook status=' + status + '\n' + JSON.stringify(message, null, 2)));
+                    }
+                  }
+                  return;
+                }
+
+                if (!message) return;
+                const blueprintTypeId =
+                  message.blueprintTypeId ??
+                  message.blueprintTypeID ??
+                  message.blueprint_type_id ??
+                  message.blueprintTypeid;
+                const cost = message.buildCostPerUnit;
+                if (blueprintTypeId == null || cost == null) return;
+                const rows = rowByBlueprintId.get(String(blueprintTypeId)) || [];
+                rows.forEach(r => { outCookbook[r][0] = cost; });
+
+                if (debug) {
+                  const noteLines = [];
+                  noteLines.push('status: ' + status);
+                  if (message.blueprintName) noteLines.push('blueprint: ' + message.blueprintName);
+                  noteLines.push('blueprintTypeId: ' + blueprintTypeId);
+                  if (message.producedQuantity != null) noteLines.push('producedQuantity: ' + message.producedQuantity);
+                  if (message.materialCost != null) noteLines.push('materialCost: ' + formatIsk(message.materialCost));
+                  if (message.jobCost != null) noteLines.push('jobCost: ' + formatIsk(message.jobCost));
+                  if (message.excessMaterialsValue != null) noteLines.push('excessMaterialsValue: ' + formatIsk(message.excessMaterialsValue));
+                  if (message.totalCost != null) noteLines.push('totalCost: ' + formatIsk(message.totalCost));
+                  noteLines.push('buildCostPerUnit: ' + formatIsk(cost));
+
+                  const buyMsg = buyByBlueprintId.get(String(blueprintTypeId));
+                  if (buyMsg) {
+                    noteLines.push('--- cookbook buy-mode (debug) ---');
+                    if (buyMsg.materialCost != null) noteLines.push('materialCost(buy): ' + formatIsk(buyMsg.materialCost));
+                    if (buyMsg.jobCost != null) noteLines.push('jobCost(buy): ' + formatIsk(buyMsg.jobCost));
+                    if (buyMsg.excessMaterialsValue != null) noteLines.push('excessMaterialsValue(buy): ' + formatIsk(buyMsg.excessMaterialsValue));
+                    if (buyMsg.totalCost != null) noteLines.push('totalCost(buy): ' + formatIsk(buyMsg.totalCost));
+                    if (buyMsg.buildCostPerUnit != null) noteLines.push('buildCostPerUnit(buy): ' + formatIsk(buyMsg.buildCostPerUnit));
+                  }
+
+                  noteLines.push('--- request params ---');
+                  noteLines.push('system: ' + systemName);
+                  noteLines.push('priceMode: sell');
+                  noteLines.push('baseMe: ' + String(baseMe));
+                  noteLines.push('componentsMe: ' + String(componentsMe));
+                  const facility = getDefaultFacilityConfig();
+                  noteLines.push('industry: ' + facility.industryStructureType + ' rig ' + facility.industryRig);
+                  noteLines.push('reaction: ' + facility.reactionStructureType + ' rig ' + facility.reactionRig);
+                  noteLines.push('facilityTax%: ' + facility.facilityTax);
+                  rows.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, noteLines.join('\n')));
+                }
+              });
+            }
+          }
+        }
+      }
+
       // Always try to fetch Cookbook prices into column C for comparison.
-      // Cookbook may fail/rate-limit independently; we keep internal B intact.
-      {
+      // If we are in cookbook-only mode, fall back to DEFAULT_ME_T1 (we did not compute hints).
+      if (CALC_MODE === 'cookbook') {
         const BATCH = 20;
+        const baseMe = DEFAULT_ME_T1;
+        const componentsMe = DEFAULT_ME_T1;
         for (let start = 0; start < blueprintIds.length; start += BATCH) {
           const batchIds = blueprintIds.slice(start, start + BATCH);
           let data;
           let dataBuy = null;
           try {
-            data = fetchBuildCosts(batchIds, systemName, 'sell');
-            // Debug-only: also fetch buy-mode so we can prove/disprove the "Cookbook always uses buy" hypothesis.
+            data = fetchBuildCosts(batchIds, systemName, 'sell', baseMe, componentsMe);
             if (debug) {
               try {
-                dataBuy = fetchBuildCosts(batchIds, systemName, 'buy');
+                dataBuy = fetchBuildCosts(batchIds, systemName, 'buy', baseMe, componentsMe);
               } catch (e2) {
                 dataBuy = null;
               }
             }
           } catch (e) {
             if (debug) {
-              batchIds.forEach(id => {
-                const rows = rowByBlueprintId.get(String(id)) || [];
+              batchIds.forEach(id2 => {
+                const rows = rowByBlueprintId.get(String(id2)) || [];
                 rows.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, 'Cookbook error: ' + e));
               });
             }
             continue;
           }
 
-          if (!Array.isArray(data)) {
-            if (debug) {
-              batchIds.forEach(id => {
-                const rows = rowByBlueprintId.get(String(id)) || [];
-                rows.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, 'Cookbook invalid response (not array)'));
-              });
-            }
-            continue;
-          }
+          if (!Array.isArray(data)) continue;
 
-          // Build lookup for buy-mode response (debug only)
           const buyByBlueprintId = new Map();
           if (debug && Array.isArray(dataBuy)) {
             dataBuy.forEach(entry => {
@@ -722,11 +1068,7 @@ const Calculator = (() => {
               if (status !== 200) return;
               const msg = entry.message;
               if (!msg) return;
-              const bpId =
-                msg.blueprintTypeId ??
-                msg.blueprintTypeID ??
-                msg.blueprint_type_id ??
-                msg.blueprintTypeid;
+              const bpId = msg.blueprintTypeId ?? msg.blueprintTypeID ?? msg.blueprint_type_id ?? msg.blueprintTypeid;
               if (bpId == null) return;
               buyByBlueprintId.set(String(bpId), msg);
             });
@@ -736,25 +1078,8 @@ const Calculator = (() => {
             if (!entry) return;
             const status = (typeof entry.status === 'string') ? Number(entry.status) : entry.status;
             const message = entry.message;
-
-            // If Cookbook returned a per-blueprint error, try to attach it to the right row.
-            if (status !== 200) {
-              if (debug && message && typeof message === 'object') {
-                const bpIdErr = message.blueprintTypeId ?? message.blueprintTypeID ?? message.blueprint_type_id;
-                if (bpIdErr != null) {
-                  const rowsErr = rowByBlueprintId.get(String(bpIdErr)) || [];
-                  rowsErr.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, 'Cookbook status=' + status + '\n' + JSON.stringify(message, null, 2)));
-                }
-              }
-              return;
-            }
-
-            if (!message) return;
-            const blueprintTypeId =
-              message.blueprintTypeId ??
-              message.blueprintTypeID ??
-              message.blueprint_type_id ??
-              message.blueprintTypeid;
+            if (status !== 200 || !message) return;
+            const blueprintTypeId = message.blueprintTypeId ?? message.blueprintTypeID ?? message.blueprint_type_id ?? message.blueprintTypeid;
             const cost = message.buildCostPerUnit;
             if (blueprintTypeId == null || cost == null) return;
             const rows = rowByBlueprintId.get(String(blueprintTypeId)) || [];
@@ -765,70 +1090,31 @@ const Calculator = (() => {
               noteLines.push('status: ' + status);
               if (message.blueprintName) noteLines.push('blueprint: ' + message.blueprintName);
               noteLines.push('blueprintTypeId: ' + blueprintTypeId);
-              if (message.producedQuantity != null) noteLines.push('producedQuantity: ' + message.producedQuantity);
               if (message.materialCost != null) noteLines.push('materialCost: ' + formatIsk(message.materialCost));
               if (message.jobCost != null) noteLines.push('jobCost: ' + formatIsk(message.jobCost));
               if (message.excessMaterialsValue != null) noteLines.push('excessMaterialsValue: ' + formatIsk(message.excessMaterialsValue));
               if (message.totalCost != null) noteLines.push('totalCost: ' + formatIsk(message.totalCost));
               noteLines.push('buildCostPerUnit: ' + formatIsk(cost));
 
-              // If we managed to fetch buy-mode too, print it for comparison.
               const buyMsg = buyByBlueprintId.get(String(blueprintTypeId));
               if (buyMsg) {
                 noteLines.push('--- cookbook buy-mode (debug) ---');
-                if (buyMsg.materialCost != null) noteLines.push('materialCost(buy): ' + formatIsk(buyMsg.materialCost));
-                if (buyMsg.jobCost != null) noteLines.push('jobCost(buy): ' + formatIsk(buyMsg.jobCost));
-                if (buyMsg.excessMaterialsValue != null) noteLines.push('excessMaterialsValue(buy): ' + formatIsk(buyMsg.excessMaterialsValue));
-                if (buyMsg.totalCost != null) noteLines.push('totalCost(buy): ' + formatIsk(buyMsg.totalCost));
                 if (buyMsg.buildCostPerUnit != null) noteLines.push('buildCostPerUnit(buy): ' + formatIsk(buyMsg.buildCostPerUnit));
               }
 
               noteLines.push('--- request params ---');
               noteLines.push('system: ' + systemName);
               noteLines.push('priceMode: sell');
-              noteLines.push('baseMe: 10');
-              noteLines.push('componentsMe: 10');
-              const facility = getDefaultFacilityConfig();
-              noteLines.push('industry: ' + facility.industryStructureType + ' rig ' + facility.industryRig);
-              noteLines.push('reaction: ' + facility.reactionStructureType + ' rig ' + facility.reactionRig);
-              noteLines.push('facilityTax%: ' + facility.facilityTax);
+              noteLines.push('baseMe: ' + String(baseMe));
+              noteLines.push('componentsMe: ' + String(componentsMe));
               rows.forEach(r => setRowNote(sheet, r, COL_COOKBOOK, noteLines.join('\n')));
             }
           });
         }
-      }
 
-      if (CALC_MODE === 'cookbook') {
         // In cookbook-only mode mirror column C into B.
         for (let i = 0; i < ROW_COUNT; i++) {
           if (outCookbook[i][0] !== '' && outCookbook[i][0] != null) outCosts[i][0] = outCookbook[i][0];
-        }
-      } else {
-        // INTERNAL mode: compute per blueprint (cached for duplicates).
-        const costCache = new Map();
-        const debugCache = debug ? new Map() : null;
-        for (let i = 0; i < blueprintIds.length; i++) {
-          const id = blueprintIds[i];
-          const key = String(id);
-          let cost = costCache.get(key);
-          if (cost == null) {
-            try {
-              const res = computeInternalBuildCostPerUnit(id, systemCostIndexByActivity, debug);
-              cost = res.perUnit;
-              costCache.set(key, cost);
-              if (debug && res.debug) debugCache.set(key, res.debug);
-            } catch (e) {
-              try { console.log('Calculator internal error for blueprintTypeId=' + id + ':', e); } catch (ee) {}
-              costCache.set(key, null);
-              if (debug) debugCache.set(key, { blueprintTypeId: id, error: String(e), facility: getDefaultFacilityConfig(), system: { name: getDefaultSystemName() } });
-            }
-          }
-
-          const rows = rowByBlueprintId.get(key) || [];
-          rows.forEach(r => {
-            if (cost != null) outCosts[r][0] = cost;
-            if (debug) rowDebug[r] = debugCache.get(key) || null;
-          });
         }
       }
 
@@ -856,12 +1142,24 @@ const Calculator = (() => {
 
           // Human-readable breakdown note.
           const lines = [];
+          if (names && names[i]) lines.push('input: ' + String(names[i]));
           lines.push('blueprintTypeId: ' + dbg.blueprintTypeId);
+
+          // Help validate resolver correctness (debug-only).
+          try {
+            const t = Universe.getType(Number(dbg.blueprintTypeId));
+            if (t && t.type_name) lines.push('resolvedBlueprintName: ' + String(t.type_name));
+          } catch (e) {
+            // ignore
+          }
           if (dbg.backendMeta) lines.push('backendMeta: ' + JSON.stringify(dbg.backendMeta));
           if (dbg.system && dbg.system.name) lines.push('system: ' + dbg.system.name);
-          lines.push('materialPriceMode(internal): ' + String(INTERNAL_MATERIAL_PRICE_MODE));
-          lines.push('ME/TE T1: ' + String(DEFAULT_ME_T1) + '/' + String(DEFAULT_TE_T1));
-          lines.push('ME/TE T2: ' + String(DEFAULT_ME_T2) + '/' + String(DEFAULT_TE_T2));
+          lines.push('materialPriceMode(internal): ' + String(dbg.preferredMaterialPriceMode || INTERNAL_MATERIAL_PRICE_MODE));
+          lines.push('mergeModules(internal): ' + String(INTERNAL_MERGE_MODULES));
+          if (dbg.hasInventionJob != null) lines.push('hasInventionJob: ' + String(!!dbg.hasInventionJob));
+          if (dbg.finalIsShip != null) lines.push('finalIsShip: ' + String(!!dbg.finalIsShip));
+          lines.push('ME/TE sub-components: ' + String(DEFAULT_ME_T1) + '/' + String(DEFAULT_TE_T1) + ' (T1) and ' + String(DEFAULT_ME_T2) + '/' + String(DEFAULT_TE_T2) + ' (T2)');
+          lines.push('ME/TE T2 final product: ' + String(FINAL_T2_ME) + '/' + String(FINAL_T2_TE) + ' (applied to ' + (dbg.finalIsShip ? 'shipT2' : 'moduleT2') + ')');
           if (dbg.facility) {
             lines.push('facilityTax%: ' + String(dbg.facility.facilityTax));
             lines.push('industry: ' + String(dbg.facility.industryStructureType) + ' rig ' + String(dbg.facility.industryRig));
@@ -870,8 +1168,13 @@ const Calculator = (() => {
           lines.push('producedQty: ' + String(dbg.producedQuantity));
           // Cookbook semantics: totalCost = materialCost + jobCost; excess is informational.
           if (dbg.materialCost != null) lines.push('materialCost: ' + formatIsk(dbg.materialCost));
+          if (dbg.materialCostBuyWavg != null) lines.push('materialCost(buyWavg, internal debug): ' + formatIsk(dbg.materialCostBuyWavg));
+          if (dbg.materialCostBuyAvg != null) lines.push('materialCost(buyAvg, internal debug): ' + formatIsk(dbg.materialCostBuyAvg));
           if (dbg.materialCostBuyTop5 != null) lines.push('materialCost(buyTop5, internal debug): ' + formatIsk(dbg.materialCostBuyTop5));
           if (dbg.materialCostSplitTop5 != null) lines.push('materialCost(splitTop5, internal debug): ' + formatIsk(dbg.materialCostSplitTop5));
+          if (dbg.materialCostSellWavg != null) lines.push('materialCost(sellWavg, internal debug): ' + formatIsk(dbg.materialCostSellWavg));
+          if (dbg.materialCostSellAvg != null) lines.push('materialCost(sellAvg, internal debug): ' + formatIsk(dbg.materialCostSellAvg));
+          if (dbg.materialCostSellTop5 != null) lines.push('materialCost(sellTop5, internal debug): ' + formatIsk(dbg.materialCostSellTop5));
           if (dbg.skippedIntermediateInputsCost != null) lines.push('skippedIntermediateInputsCost: ' + formatIsk(dbg.skippedIntermediateInputsCost));
           if (dbg.excessMaterialsValue != null) lines.push('excessMaterialsValue: ' + formatIsk(dbg.excessMaterialsValue));
           if (dbg.materialCostNetIfSellExcess != null) lines.push('materialCostNetIfSellExcess: ' + formatIsk(dbg.materialCostNetIfSellExcess));
@@ -890,6 +1193,34 @@ const Calculator = (() => {
               if (!s.has(k)) { s.add(k); uniq.push(p); }
             });
             lines.push('missingPrices: ' + uniq.slice(0, 30).map(p => p.type + ' (' + p.price + ')').join(', '));
+          }
+
+          if (dbg.materialInputPriceModeCounts && Object.keys(dbg.materialInputPriceModeCounts).length) {
+            const entries = Object.entries(dbg.materialInputPriceModeCounts)
+              .map(([mode, cnt]) => ({ mode, cnt: Number(cnt) || 0 }))
+              .sort((a, b) => b.cnt - a.cnt);
+            lines.push('priceModesUsed(material inputs): ' + entries.map(e => e.mode + '=' + String(e.cnt)).join(', '));
+
+            const preferred = String(dbg.preferredMaterialPriceMode || INTERNAL_MATERIAL_PRICE_MODE || '').trim();
+            if (preferred && !(preferred in dbg.materialInputPriceModeCounts)) {
+              lines.push('WARNING: preferred materialPriceMode not used. Ceník nemá použitelnou hodnotu pro ' + preferred + ' (typicky prázdné Marketeer sloupce; zkus spustit getPricesMarketeer()).');
+
+              if (Array.isArray(dbg.materials) && dbg.materials.length) {
+                lines.push('--- cenik raw (diagnostic) ---');
+                dbg.materials.slice(0, 3).forEach(m => {
+                  const p = priceList.getPrice(m.type);
+                  const rawSellWavg = p ? p.jitaSellWavg : null;
+                  const rawSellAvg = p ? p.jitaSellAvg : null;
+                  const rawSellTop5 = p ? p.jitaSellTop5 : null;
+                  lines.push(
+                    m.type +
+                    ' sellWavg=' + String(rawSellWavg) + ' -> ' + String(toNumberLoose(rawSellWavg)) +
+                    ' | sellAvg=' + String(rawSellAvg) + ' -> ' + String(toNumberLoose(rawSellAvg)) +
+                    ' | sellTop5=' + String(rawSellTop5) + ' -> ' + String(toNumberLoose(rawSellTop5))
+                  );
+                });
+              }
+            }
           }
 
           if (Array.isArray(dbg.jobs) && dbg.jobs.length) {
@@ -956,6 +1287,7 @@ const Calculator = (() => {
       // Write outputs
       sheet.getRange(START_ROW, COL_COST, ROW_COUNT, 1).setValues(outCosts);
       sheet.getRange(START_ROW, COL_COOKBOOK, ROW_COUNT, 1).setValues(outCookbook);
+      sheet.getRange(START_ROW, COL_EXCESS_VALUE, ROW_COUNT, 1).setValues(outExcess);
     },
   };
 })();

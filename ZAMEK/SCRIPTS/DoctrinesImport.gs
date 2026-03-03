@@ -52,6 +52,130 @@ function doctrinesImportEftFitFromCell() {
   _doctrinesUpsertItems_(sheet, target.itemCol, parsed);
 }
 
+/*
+ * Update EXISTING doctrine by header (row 2) and replace its contents from the current EFT fit.
+ * If doctrine header does not exist anywhere, shows a message and does nothing.
+ *
+ * Sources:
+ * - From cell: expects the selected cell to contain a full EFT fit text (first non-empty line is the header)
+ * - From staging: expects the first non-empty staging line to be the header
+ */
+
+function doctrinesUpdateExistingEftFitFromCell() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const ui = SpreadsheetApp.getUi();
+  if (!sheet || sheet.getName() !== 'DOKTRYNY DATASHEET') {
+    ui.alert('Chyba!', 'Musíš být na sheetu DOKTRYNY DATASHEET', ui.ButtonSet.OK);
+    return;
+  }
+
+  const range = sheet.getActiveRange();
+  if (!range) {
+    ui.alert('Chyba!', 'Nejdřív vyber buňku s EFT fitem', ui.ButtonSet.OK);
+    return;
+  }
+
+  const fitTextRaw = String(range.getValue() == null ? '' : range.getValue()).trim();
+  if (!fitTextRaw) {
+    ui.alert('Chyba!', 'Vybraná buňka je prázdná (čekám EFT fit text)', ui.ButtonSet.OK);
+    return;
+  }
+
+  const headerLine = _doctrinesGetFirstNonEmptyLine_(fitTextRaw);
+  if (!headerLine) {
+    ui.alert('Chyba!', 'V textu se nepovedlo najít hlavičku (první řádek)', ui.ButtonSet.OK);
+    return;
+  }
+
+  const parsed = _doctrinesParseEftFit_(fitTextRaw);
+  if (!parsed.items.length) {
+    ui.alert('Chyba!', 'Ve fitu nebyly nalezeny žádné položky', ui.ButtonSet.OK);
+    return;
+  }
+
+  const pre = _doctrinesPreloadBlocks_(sheet);
+  const matches = _doctrinesFindDoctrineItemColsByHeaderPreloaded_(pre, headerLine);
+  if (!matches.length) {
+    ui.alert('Doktryna neexistuje.', 'Hlavička nebyla nalezena: ' + headerLine, ui.ButtonSet.OK);
+    return;
+  }
+  if (matches.length > 1) {
+    ui.alert('Chyba!', 'Hlavička existuje vícekrát (duplicitní doktrýny). Neupdatuju: ' + headerLine, ui.ButtonSet.OK);
+    return;
+  }
+
+  // If only quantities changed, we MUST treat it as a change.
+  // Therefore compare signatures that include qty (name -> total qty across build+buy areas).
+  const itemCol = matches[0];
+  const existingSig = _doctrinesReadDoctrineSignaturePreloaded_(pre, itemCol);
+  const newSig = _doctrinesBuildParsedSignature_(parsed);
+  if (_doctrinesMapsEqual_(existingSig, newSig)) {
+    ui.alert('Bez změn', 'Doktrýna už odpovídá aktuálnímu fitu: ' + headerLine, ui.ButtonSet.OK);
+    return;
+  }
+
+  _doctrinesReplaceDoctrineItems_(sheet, itemCol, parsed);
+}
+
+function doctrinesUpdateExistingEftFitFromStaging() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const ui = SpreadsheetApp.getUi();
+  if (!sheet || sheet.getName() !== 'DOKTRYNY DATASHEET') {
+    ui.alert('Chyba!', 'Musíš být na sheetu DOKTRYNY DATASHEET', ui.ButtonSet.OK);
+    return;
+  }
+
+  const STAGING_COL = 2; // B
+  const STAGING_START_ROW = 70;
+  const STAGING_END_ROW = 200;
+
+  const fitLines = sheet
+    .getRange(STAGING_START_ROW, STAGING_COL, STAGING_END_ROW - STAGING_START_ROW + 1, 1)
+    .getValues()
+    .map(r => String(r[0] == null ? '' : r[0]).trim())
+    .filter(s => s !== '');
+
+  const headerLine = fitLines.length ? fitLines[0] : '';
+  const fitTextRaw = fitLines.join('\n').trim();
+  if (!fitTextRaw) {
+    ui.alert('Chyba!', 'Staging oblast B70:B200 je prázdná (čekám EFT fit)', ui.ButtonSet.OK);
+    return;
+  }
+  if (!headerLine) {
+    ui.alert('Chyba!', 'Staging oblast neobsahuje hlavičku (první řádek)', ui.ButtonSet.OK);
+    return;
+  }
+
+  const parsed = _doctrinesParseEftFit_(fitTextRaw);
+  if (!parsed.items.length) {
+    ui.alert('Chyba!', 'Ve fitu nebyly nalezeny žádné položky', ui.ButtonSet.OK);
+    return;
+  }
+
+  const pre = _doctrinesPreloadBlocks_(sheet);
+  const matches = _doctrinesFindDoctrineItemColsByHeaderPreloaded_(pre, headerLine);
+  if (!matches.length) {
+    ui.alert('Doktryna neexistuje.', 'Hlavička nebyla nalezena: ' + headerLine, ui.ButtonSet.OK);
+    return;
+  }
+  if (matches.length > 1) {
+    ui.alert('Chyba!', 'Hlavička existuje vícekrát (duplicitní doktrýny). Neupdatuju: ' + headerLine, ui.ButtonSet.OK);
+    return;
+  }
+
+  // If only quantities changed, we MUST treat it as a change.
+  // Therefore compare signatures that include qty (name -> total qty across build+buy areas).
+  const itemCol = matches[0];
+  const existingSig = _doctrinesReadDoctrineSignaturePreloaded_(pre, itemCol);
+  const newSig = _doctrinesBuildParsedSignature_(parsed);
+  if (_doctrinesMapsEqual_(existingSig, newSig)) {
+    ui.alert('Bez změn', 'Doktrýna už odpovídá aktuálnímu fitu: ' + headerLine, ui.ButtonSet.OK);
+    return;
+  }
+
+  _doctrinesReplaceDoctrineItems_(sheet, itemCol, parsed);
+}
+
 /**
  * Reads EFT fit from a fixed staging area (multi-line paste), e.g. column B rows 70..200,
  * and imports it into the doctrine column-block inferred from the CURRENT selection.
@@ -193,6 +317,14 @@ function _doctrinesNormalizeHeader_(s) {
   return String(s == null ? '' : s).trim().toLowerCase();
 }
 
+function _doctrinesGetFirstNonEmptyLine_(text) {
+  const lines = String(text == null ? '' : text).split(/\r?\n/).map(l => String(l).trim());
+  for (const l of lines) {
+    if (l) return l;
+  }
+  return '';
+}
+
 function _doctrinesPreloadBlocks_(sheet) {
   const lastCol = sheet.getLastColumn();
   if (!lastCol || lastCol < 2) {
@@ -217,6 +349,18 @@ function _doctrinesHeaderExistsAnywherePreloaded_(pre, headerText) {
     if (h && h === want) return true;
   }
   return false;
+}
+
+function _doctrinesFindDoctrineItemColsByHeaderPreloaded_(pre, headerText) {
+  const want = _doctrinesNormalizeHeader_(headerText);
+  if (!want || !pre || !pre.lastCol) return [];
+
+  const cols = [];
+  for (let itemCol = 2; itemCol <= pre.lastCol; itemCol += 3) {
+    const h = _doctrinesNormalizeHeader_(pre.headerRow[itemCol - 1]);
+    if (h && h === want) cols.push(itemCol);
+  }
+  return cols;
 }
 
 function _doctrinesIsBlockEmptyPreloaded_(pre, itemCol) {
@@ -306,6 +450,128 @@ function _doctrinesToInt_(v) {
   const n = (typeof v === 'number') ? v : parseFloat(String(v).replace(',', '.'));
   if (!isFinite(n)) return 0;
   return Math.round(n);
+}
+
+function _doctrinesIsBoosterOrDrug_(typeName) {
+  const n = String(typeName == null ? '' : typeName).trim().toLowerCase();
+  if (!n) return false;
+
+  // Ancillary exceptions: ONLY these module families are buy-list.
+  if (n.includes('ancillary armor repairer')) return true;
+  if (n.includes('ancillary shield booster')) return true;
+
+  // New-style combat boosters.
+  if (n.includes(' dose ')) return true;
+  if (n.endsWith(' dose i') || n.endsWith(' dose ii') || n.endsWith(' dose iii')) return true;
+  if (n.includes("'pyrolancea'")) return true;
+
+  // Legacy combat boosters.
+  const raw = String(typeName == null ? '' : typeName);
+  const hasTier = /\b(synth|standard|improved|strong)\b/i.test(raw);
+  const hasFamily = /(blue pill|exile|x-instinct|crash|drop|mindflood|frentix|sooth sayer|vitoc|nugoehuvi)/i.test(raw);
+  if (hasTier && hasFamily && n.includes('booster')) return true;
+
+  return false;
+}
+
+function _doctrinesIsFactionItemName_(typeName) {
+  const raw = String(typeName == null ? '' : typeName).trim();
+  if (!raw) return false;
+
+  function categoryNameSafe(name) {
+    try {
+      const t = Universe.searchType(name);
+      return String((t && t.category_name) ? t.category_name : '').trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  // Navy/Fleet Issue are ships; ships are allowed to be buildable in our workflow.
+  if (/\b(navy issue|fleet issue)\b/i.test(raw)) return false;
+
+  const patterns = [
+    /\b(caldari navy|federation navy|imperial navy|republic fleet|khanid navy|ammatar navy)\b/i,
+    /\b(sisters of eve|mordu'?s legion|thukker)\b/i,
+    /\b(dread guristas|true sansha|shadow serpentis|domination|dark blood)\b/i,
+  ];
+  for (const re of patterns) {
+    if (!re.test(raw)) continue;
+
+    // Faction/pirate SHIPS can be produced (BPC).
+    const cat = categoryNameSafe(raw);
+    if (cat && cat.toLowerCase() === 'ship') return false;
+
+    return true;
+  }
+  return false;
+}
+
+function _doctrinesIsBuildable_(typeName) {
+  try {
+    const bpName = String(typeName || '').trim() + ' Blueprint';
+    const t = Universe.searchType(bpName);
+
+    if (!t || String(t.type_name || '').trim() !== bpName) return false;
+    if (String(t.category_name || '').trim() !== 'Blueprint') return false;
+
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function _doctrinesToBuyList_(parsedItem) {
+  const name = parsedItem && parsedItem.name;
+  const kind = parsedItem && parsedItem.kind;
+  if (!name) return true;
+
+  if (kind === 'charge') return true;
+  if (_doctrinesIsBoosterOrDrug_(name)) return true;
+  if (_doctrinesIsFactionItemName_(name)) return true;
+  return !_doctrinesIsBuildable_(name);
+}
+
+function _doctrinesReplaceDoctrineItems_(sheet, itemCol, parsed) {
+  const ui = SpreadsheetApp.getUi();
+
+  const BUILD_START_ROW = 3;
+  const BUILD_ROWS = 38; // 3..40
+  const BUY_START_ROW = 43;
+  const BUY_ROWS = 20; // 43..62
+
+  const buildOut = Array.from({ length: BUILD_ROWS }, () => ['', '']);
+  const buyOut = Array.from({ length: BUY_ROWS }, () => ['', '']);
+
+  const buildItems = [];
+  const buyItems = [];
+  for (const it of (parsed && parsed.items) ? parsed.items : []) {
+    const name = String(it && it.name != null ? it.name : '').trim();
+    if (!name) continue;
+    const qty = _doctrinesToInt_(it.qty) || 1;
+
+    if (_doctrinesToBuyList_(it)) buyItems.push([name, qty]);
+    else buildItems.push([name, qty]);
+  }
+
+  if (buildItems.length > BUILD_ROWS) {
+    ui.alert('Chyba!', 'Buildable část má jen ' + BUILD_ROWS + ' slotů. Fit má buildable položek: ' + buildItems.length, ui.ButtonSet.OK);
+    return;
+  }
+  if (buyItems.length > BUY_ROWS) {
+    ui.alert('Chyba!', 'Buy list část má jen ' + BUY_ROWS + ' řádků. Fit má buy položek: ' + buyItems.length, ui.ButtonSet.OK);
+    return;
+  }
+
+  for (let i = 0; i < buildItems.length; i++) buildOut[i] = buildItems[i];
+  for (let i = 0; i < buyItems.length; i++) buyOut[i] = buyItems[i];
+
+  // Replace: clear + write whole blocks in 2 batched calls.
+  sheet.getRange(BUILD_START_ROW, itemCol, BUILD_ROWS, 2).clearContent();
+  sheet.getRange(BUY_START_ROW, itemCol, BUY_ROWS, 2).clearContent();
+
+  sheet.getRange(BUILD_START_ROW, itemCol, BUILD_ROWS, 2).setValues(buildOut);
+  sheet.getRange(BUY_START_ROW, itemCol, BUY_ROWS, 2).setValues(buyOut);
 }
 
 function _doctrinesBuildParsedSignature_(parsed) {
@@ -491,44 +757,6 @@ function _doctrinesUpsertItems_(sheet, itemCol, parsed) {
     return 0;
   }
 
-  function isBoosterOrDrug(typeName) {
-    const n = String(typeName == null ? '' : typeName).trim().toLowerCase();
-    if (!n) return false;
-
-    // Ancillary exceptions: ONLY these module families are buy-list.
-    // Avoid false-positives like "Medium Ancillary Current Router I" (a rig, buildable).
-    if (n.includes('ancillary armor repairer')) return true;
-    if (n.includes('ancillary shield booster')) return true;
-
-    // Combat boosters / drugs: always buy list.
-    // We must avoid false-positives like "Small Capacitor Booster II" or "Shield Booster" modules.
-    // We therefore match ONLY combat-booster-specific patterns.
-
-    // New-style combat boosters: "Agency 'Pyrolancea' DB3 Dose I" etc.
-    if (n.includes(' dose ')) return true;
-    if (n.endsWith(' dose i') || n.endsWith(' dose ii') || n.endsWith(' dose iii')) return true;
-    if (n.includes("'pyrolancea'")) return true;
-
-    // Legacy combat boosters: tier keyword + known booster family keyword + word "booster".
-    // Examples: "Synth Blue Pill Booster", "Standard Exile Booster", "Improved X-Instinct Booster", "Strong Crash Booster".
-    const hasTier = /\b(synth|standard|improved|strong)\b/i.test(typeName);
-    const hasFamily = /(blue pill|exile|x-instinct|crash|drop|mindflood|frentix|sooth sayer|vitoc|nugoehuvi)/i.test(typeName);
-    if (hasTier && hasFamily && n.includes('booster')) return true;
-
-    return false;
-  }
-
-  function isBuildable(typeName) {
-    // Charges always go to buy list.
-    // For everything else: try to find a blueprint type ("X Blueprint").
-    try {
-      Universe.searchType(typeName + ' Blueprint');
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
   let addedBuild = 0;
   let addedBuy = 0;
   let skippedExisting = 0;
@@ -541,7 +769,7 @@ function _doctrinesUpsertItems_(sheet, itemCol, parsed) {
       continue;
     }
 
-    const toBuyList = (it.kind === 'charge') ? true : (isBoosterOrDrug(name) ? true : !isBuildable(name));
+    const toBuyList = _doctrinesToBuyList_(it);
 
     if (!toBuyList) {
       const row = findFirstEmptyRow(BUILD_START_ROW, BUILD_END_ROW);

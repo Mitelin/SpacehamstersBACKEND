@@ -8,24 +8,41 @@ var g_pricelist;
 function getPricesMarketeer() {
   Logger.log('>>> getPrices()');
 
-  // activate the sheet
-  pricelistSheet.activate()
+  // Avoid concurrent refreshes (menu click, trigger, etc.)
+  const lock = LockService.getScriptLock();
+  const locked = lock.tryLock(5000);
+  if (!locked) {
+    SpreadsheetApp.getActive().toast('Ceník: refresh už běží (lock). Zkus to prosím za chvilku znovu.', 'Ceník', 7);
+    return;
+  }
 
-  // delete current prices
-  var lastRow = pricelistSheet.getLastRow();
-//  pricelistSheet.getRange(2, pricecolEVE, lastRow - 1, 17).setValue("");
+  try {
+    // activate the sheet
+    pricelistSheet.activate()
 
-  // nacti ID komodit
-  pricelistFetchItemIds();
+    // delete current prices
+    var lastRow = pricelistSheet.getLastRow();
+//    pricelistSheet.getRange(2, pricecolEVE, lastRow - 1, 17).setValue("");
 
-  // nacti ceny komodit podle ID
-  pricelistFetchEVEPrices();
+    // nacti ID komodit
+    pricelistFetchItemIds();
 
-  // nacti statistiky komodit z EVE Marketeeru
-  pricelistFetchMarketeerPrices();
+    // nacti ceny komodit podle ID
+    pricelistFetchEVEPrices();
 
-  // show result in notification window
-  SpreadsheetApp.getUi().alert('Aktualizace dokončena.', '', SpreadsheetApp.getUi().ButtonSet.OK);
+    // nacti statistiky komodit z EVE Marketeeru
+    const res = pricelistFetchMarketeerPrices();
+
+    if (res && res.partial) {
+      SpreadsheetApp.getActive().toast('Ceník: částečně hotovo (časový limit). Spusť znovu getPricesMarketeer() pro pokračování.', 'Ceník', 10);
+      return;
+    }
+
+    // show result in notification window
+    SpreadsheetApp.getUi().alert('Aktualizace dokončena.', '', SpreadsheetApp.getUi().ButtonSet.OK);
+  } finally {
+    try { lock.releaseLock(); } catch (e) {}
+  }
 }
 
 /*
@@ -287,23 +304,27 @@ function pricelistFetchTycoonPrices() {
         let headers = response.getHeaders();
         let expires = headers.Expires;
 
-        sheetData[rows[res]] = 
-          [ (data.buyAvgFivePercent + data.sellAvgFivePercent) / 2,
-            '', //item.buy.min,
-            '', //item.buy.avg,
-            '', //item.buy.wavg,
-            '', //item.buy.median,
-            data.buyAvgFivePercent,
-            data.maxBuy,
-            data.buyVolume,
-            data.minSell,
-            '', //item.sell.avg,
-            '', //item.sell.wavg,
-            '', //item.sell.median,
-            '', //item.sell.max,
-            data.sellAvgFivePercent,
-            data.sellVolume,
-            expires]
+        // IMPORTANT: Tycoon API does not provide avg/wavg; do NOT wipe existing values.
+        // Keep whatever is already in columns buy.avg/buy.wavg/sell.avg/sell.wavg.
+        let rowArr = sheetData[rows[res]];
+        if (!rowArr || rowArr.length < 16) rowArr = new Array(16).fill('');
+        rowArr[0] = (data.buyAvgFivePercent + data.sellAvgFivePercent) / 2;
+        // rowArr[1] buy.min (not provided)
+        // rowArr[2] buy.avg (preserve)
+        // rowArr[3] buy.wavg (preserve)
+        // rowArr[4] buy.median (not provided)
+        rowArr[5] = data.buyAvgFivePercent;
+        rowArr[6] = data.maxBuy;
+        rowArr[7] = data.buyVolume;
+        rowArr[8] = data.minSell;
+        // rowArr[9] sell.avg (preserve)
+        // rowArr[10] sell.wavg (preserve)
+        // rowArr[11] sell.median (not provided)
+        // rowArr[12] sell.max (not provided)
+        rowArr[13] = data.sellAvgFivePercent;
+        rowArr[14] = data.sellVolume;
+        rowArr[15] = expires;
+        sheetData[rows[res]] = rowArr;
 
         j += 1;
       }
@@ -325,64 +346,187 @@ function pricelistFetchTycoonPrices() {
 function pricelistFetchMarketeerPrices() {
   Logger.log('>>> pricelistFetchMarketeerPrices()');
 
-  // volej API s balikem nekolika kusu
-  let batch = 100
-  var i = 0;
-  while (i < g_pricelist.length) {
-//  while (g_pricelist[i][0]) {
-    // priprav ID polozek v nasledujicim baliku dotazu
-    let typeIds = '';
-    let j = 0;
-    
-    while (g_pricelist[i+j][0] && j < batch) {
-      typeIds += '&typeid=' + g_pricelist[i+j][1];
-      j++;
-    }
-
-    if(typeIds) {
-      // GET request na EVE Marketeer API pro market prices
-      Logger.log(typeIds);
-      var response = UrlFetchApp.fetch('https://api.evemarketer.com/ec/marketstat/json?regionlimit=10000002' + typeIds);
-
-      // parsuj odpoved do pole struktur
-      var json = response.getContentText();
-      var data = JSON.parse(json);
-//      Logger.log(data);
-
-      data.forEach(function (item) {
-        // najdi spravnou radku ve sheetu
-        typeId = (item.buy.forQuery.types[0]).toString();
-//        Logger.log('TypeId: ' + typeId);
-
-        // find the row for fetched price
-        let row = g_pricelist.findIndex(element => element[1] == typeId)
-
-        if (row >= 0) {
-          // price found, store it to the sheet
-          pricelistSheet.getRange(2 + row, pricecolEVE + 2, 1, 15)
-            .setValues([[
-              (item.buy.fivePercent + item.sell.fivePercent) / 2,
-              item.buy.min,
-              item.buy.avg,
-              item.buy.wavg,
-              item.buy.median,
-              item.buy.fivePercent,
-              item.buy.max,
-              item.buy.volume,
-              item.sell.min,
-              item.sell.avg,
-              item.sell.wavg,
-              item.sell.median,
-              item.sell.max,
-              item.sell.fivePercent,
-              item.sell.volume
-            ]]);
-        }
-      });
-    }
-
-    i+= batch;
+  // If run from scheduler, the pricelist global variable may not be initialised.
+  if (!g_pricelist) {
+    Logger.log('>>> reading type IDs');
+    g_pricelist = pricelistSheet.getRange(2, 1, pricelistSheet.getLastRow(), 3).getValues();
   }
+
+  const props = PropertiesService.getScriptProperties();
+  const resumeKey = 'pricelistFetchMarketeerPrices.nextIndex';
+  let startIndex = Number(props.getProperty(resumeKey) || 0) || 0;
+
+  // Time budget: Apps Script typically ~6 minutes max.
+  const startedAt = Date.now();
+  const MAX_MS = 5.25 * 60 * 1000; // keep margin
+
+  const now = new Date();
+  const nextExpires = new Date(now.getTime() + 60 * 60000);
+
+  // batch size: larger = fewer sheet operations; keep response sizes reasonable.
+  const batch = 200;
+  let i = startIndex;
+  while (i < g_pricelist.length) {
+    if ((Date.now() - startedAt) > MAX_MS) {
+      props.setProperty(resumeKey, String(i));
+      return { partial: true, nextIndex: i };
+    }
+
+    // Determine how many rows are in this batch
+    let j = 0;
+    while ((i + j) < g_pricelist.length && g_pricelist[i + j][0] && j < batch) j++;
+    if (j <= 0) break;
+
+    // Read current data for this batch (incl expires at the end)
+    // Range is 16 cols starting at (pricecolEVE + 2), where col[15] is Expires.
+    const sheetData = pricelistSheet.getRange(2 + i, pricecolEVE + 2, j, 16).getValues();
+
+    // Build list of typeIds that need refreshing (expired or empty)
+    const typeIds = [];
+    const localIdxByTypeId = new Map();
+    for (let k = 0; k < j; k++) {
+      const typeId = g_pricelist[i + k][1];
+      if (!typeId) continue;
+
+      // If avg/wavg columns are missing (common after Tycoon refresh), refresh regardless of Expires.
+      // Indices are within the 16-col Marketeer/Tycoon block:
+      // buy.avg=2, buy.wavg=3, sell.avg=9, sell.wavg=10.
+      const rowBlock = sheetData[k] || [];
+      const missingAvgWavg =
+        rowBlock[2] === '' || rowBlock[2] == null ||
+        rowBlock[3] === '' || rowBlock[3] == null ||
+        rowBlock[9] === '' || rowBlock[9] == null ||
+        rowBlock[10] === '' || rowBlock[10] == null;
+
+      const expiration = sheetData[k] ? sheetData[k][15] : null;
+      let expired = true;
+      try {
+        if (expiration) {
+          const exp = new Date(expiration);
+          const expMinutes = (now.getTime() - exp.getTime()) / 60000;
+          expired = !(expMinutes < 60);
+        }
+      } catch (e) {
+        expired = true;
+      }
+
+      if (expired || missingAvgWavg) {
+        const tid = String(typeId);
+        typeIds.push(tid);
+        localIdxByTypeId.set(tid, k);
+      }
+    }
+
+    if (!typeIds.length) {
+      i += j;
+      continue;
+    }
+
+    let updated = false;
+    let usedFallback = false;
+
+    // --- 1) Try legacy EVE Marketer API ---
+    try {
+      // Build query in chunks to keep URL length safe.
+      const chunkSize = 80;
+      for (let c = 0; c < typeIds.length; c += chunkSize) {
+        const chunk = typeIds.slice(c, c + chunkSize);
+        let q = '';
+        chunk.forEach(tid => { q += '&typeid=' + encodeURIComponent(tid); });
+        const resp = UrlFetchApp.fetch('https://api.evemarketer.com/ec/marketstat/json?regionlimit=10000002' + q, { muteHttpExceptions: true });
+        const code = resp.getResponseCode();
+        if (code !== 200) continue;
+        const data = JSON.parse(resp.getContentText());
+        if (!Array.isArray(data)) continue;
+        data.forEach(function (item) {
+          const typeId = (item && item.buy && item.buy.forQuery && item.buy.forQuery.types && item.buy.forQuery.types[0])
+            ? (item.buy.forQuery.types[0]).toString()
+            : null;
+          if (!typeId) return;
+          const localIdx = localIdxByTypeId.get(typeId);
+          if (localIdx == null) return;
+
+          // Write Marketeer block into 0..14; preserve expires col[15]
+          sheetData[localIdx][0] = (item.buy.fivePercent + item.sell.fivePercent) / 2;
+          sheetData[localIdx][1] = item.buy.min;
+          sheetData[localIdx][2] = item.buy.avg;
+          sheetData[localIdx][3] = item.buy.wavg;
+          sheetData[localIdx][4] = item.buy.median;
+          sheetData[localIdx][5] = item.buy.fivePercent;
+          sheetData[localIdx][6] = item.buy.max;
+          sheetData[localIdx][7] = item.buy.volume;
+          sheetData[localIdx][8] = item.sell.min;
+          sheetData[localIdx][9] = item.sell.avg;
+          sheetData[localIdx][10] = item.sell.wavg;
+          sheetData[localIdx][11] = item.sell.median;
+          sheetData[localIdx][12] = item.sell.max;
+          sheetData[localIdx][13] = item.sell.fivePercent;
+          sheetData[localIdx][14] = item.sell.volume;
+          sheetData[localIdx][15] = nextExpires;
+          updated = true;
+        });
+      }
+    } catch (e) {
+      // ignore, fallback below
+    }
+
+    // --- 2) Fallback: Fuzzwork aggregates ---
+    if (!updated) {
+      usedFallback = true;
+      try {
+        // Fuzzwork supports comma-separated list.
+        const url = 'https://market.fuzzwork.co.uk/aggregates/?region=10000002&types=' + encodeURIComponent(typeIds.join(','));
+        const resp2 = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+        if (resp2.getResponseCode() === 200) {
+          const obj = JSON.parse(resp2.getContentText());
+          typeIds.forEach(tid => {
+            const localIdx = localIdxByTypeId.get(tid);
+            if (localIdx == null) return;
+            const rec = obj ? obj[tid] : null;
+            if (!rec || !rec.buy || !rec.sell) return;
+            const buyW = Number(rec.buy.weightedAverage);
+            const sellW = Number(rec.sell.weightedAverage);
+            if (!isFinite(buyW) && !isFinite(sellW)) return;
+
+            // Populate avg/wavg using weightedAverage (good enough for Calculator).
+            if (isFinite(buyW) && buyW > 0) {
+              sheetData[localIdx][2] = buyW;  // buy.avg
+              sheetData[localIdx][3] = buyW;  // buy.wavg
+            }
+            if (isFinite(sellW) && sellW > 0) {
+              sheetData[localIdx][9] = sellW;   // sell.avg
+              sheetData[localIdx][10] = sellW;  // sell.wavg
+            }
+
+            // Optional: set split(mid) if empty.
+            if (sheetData[localIdx][0] === '' || sheetData[localIdx][0] == null) {
+              const parts = [];
+              if (isFinite(buyW) && buyW > 0) parts.push(buyW);
+              if (isFinite(sellW) && sellW > 0) parts.push(sellW);
+              if (parts.length) sheetData[localIdx][0] = parts.reduce((a, b) => a + b, 0) / parts.length;
+            }
+
+            sheetData[localIdx][15] = nextExpires;
+            updated = true;
+          });
+        }
+      } catch (e2) {
+        // ignore
+      }
+    }
+
+    if (updated) {
+      Logger.log('>>> Updating sheet content' + (usedFallback ? ' (Fuzzwork fallback)' : ''));
+      pricelistSheet.getRange(2 + i, pricecolEVE + 2, j, 16).setValues(sheetData);
+    } else {
+      Logger.log('>>> Marketeer update skipped (no data)');
+    }
+
+    i += j;
+  }
+
+  props.deleteProperty(resumeKey);
+  return { partial: false, nextIndex: null };
 }
 
 /*
@@ -542,6 +686,9 @@ var priceList = {
     }
 
     // vytvor objekt s rozparsovanou cenou
+    // NOTE: `row[...]` is 0-based index into the range values, but `pricecolEVE` is 1-based column number.
+    // Marketeer/Tycoon block is written starting at column (pricecolEVE + 2) with 15 values.
+    // Therefore the FIRST value in that block ends up at `row[pricecolEVE + 1]`.
     res = {
       name: row[2],
       group: row[3],
@@ -549,8 +696,13 @@ var priceList = {
       buyout: row[7],
       eveAverage: row[pricecolEVE - 1],
       eveAdjusted: row[pricecolEVE],
+      // Marketeer/Tycoon block (15 cols starting at pricecolEVE+2)
       jitaSplitTop5: row[pricecolEVE + 1],
+      jitaBuyAvg: row[pricecolEVE + 3],
+      jitaBuyWavg: row[pricecolEVE + 4],
       jitaBuyTop5: row[pricecolEVE + 6],
+      jitaSellAvg: row[pricecolEVE + 10],
+      jitaSellWavg: row[pricecolEVE + 11],
       jitaSellTop5: row[pricecolEVE + 14]
     }
 
@@ -570,7 +722,11 @@ var priceList = {
         "eveAverage": 0,
         "eveAdjusted": 0,
         "jitaSplitTop5": 0,
+        "jitaBuyAvg": 0,
+        "jitaBuyWavg": 0,
         "jitaBuyTop5": 0,
+        "jitaSellAvg": 0,
+        "jitaSellWavg": 0,
         "jitaSellTop5": 0
       }
     } else {
@@ -580,7 +736,11 @@ var priceList = {
         "eveAverage": row[pricecolEVE - 1],
         "eveAdjusted": row[pricecolEVE],
         "jitaSplitTop5": row[pricecolEVE + 1],
+        "jitaBuyAvg": row[pricecolEVE + 3],
+        "jitaBuyWavg": row[pricecolEVE + 4],
         "jitaBuyTop5": row[pricecolEVE + 6],
+        "jitaSellAvg": row[pricecolEVE + 10],
+        "jitaSellWavg": row[pricecolEVE + 11],
         "jitaSellTop5": row[pricecolEVE + 14]
       }
     }
