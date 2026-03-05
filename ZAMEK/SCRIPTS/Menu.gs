@@ -26,9 +26,11 @@ function onOpen() {
     .addItem('Načíst: Industry joby', 'syncJobs')
     .addItem('Načíst: Hangáry', 'syncHangars')
     .addItem('Projekty: Aktualizuj vše', 'runUpdateAllProjects')
+    .addItem('Zasobovani: Nakup list', 'zasobovaniUpdateNakupList')
     .addSeparator()
     .addSubMenu(ui.createMenu('Debug')
       .addItem('Copy token → Corporate', 'copyPersonalTokenToCorporate')
+      .addItem('Copy token → Shared (Full)', 'copyPersonalTokenToSharedFull')
       .addItem('Timing: ON', 'perfTimingEnable')
       .addItem('Timing: OFF', 'perfTimingDisable'))
     .addToUi();

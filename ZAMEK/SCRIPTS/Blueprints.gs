@@ -2042,13 +2042,13 @@ function runUpdateAllProjects() {
   // If it was cleared (e.g. after invalid_grant), guide the user to re-login.
   try {
     const sp = PropertiesService.getScriptProperties();
-    const rt = sp.getProperty('refresh_token');
-    if (!rt) {
+    const rtCorp = sp.getProperty('refresh_token');
+    const rtSharedFull = sp.getProperty('shared_full_refresh_token');
+    if (!rtCorp && !rtSharedFull) {
       SpreadsheetApp.getUi().alert(
-        'Chybí Corporate token pro Projekty.\n\nOtevři EVE Data → Login a klikni Corporate login.\n\nPotom spusť Projekty: Aktualizuj vše znovu.',
+        'Chybí sdílený token pro Projekty.\n\nTenhle sheet je nastavený tak, že Projekty běží pod sdíleným Corporate/Full tokenem.\n\nKontaktuj admina, ať udělá Corporate login, nebo Full login a pak dá Debug → Copy token → Shared (Full).',
         SpreadsheetApp.getUi().ButtonSet.OK
       );
-      try { openLogin(); } catch (e) {}
       return;
     }
   } catch (e) {

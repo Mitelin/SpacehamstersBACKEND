@@ -6,6 +6,24 @@ const Personal = (()=>{
   var characterIdByProfile = {};    // profile -> character ID
   var characterNameByProfile = {};  // profile -> character name
   var userProperties = PropertiesService.getUserProperties(); // user properties holding access token
+  var scriptProperties = PropertiesService.getScriptProperties(); // shared tokens for the whole spreadsheet
+
+  // Shared FULL token storage (ScriptProperties) to allow non-privileged users to run tooling.
+  // Keys are prefixed to avoid collisions with Corporate token storage.
+  var sharedFullProps = function() {
+    var prefix = 'shared_full_';
+    return {
+      getProperty: function(key) {
+        return scriptProperties.getProperty(prefix + key);
+      },
+      setProperty: function(key, value) {
+        return scriptProperties.setProperty(prefix + key, value);
+      },
+      deleteProperty: function(key) {
+        return scriptProperties.deleteProperty(prefix + key);
+      }
+    };
+  };
 
   var normalizeProfile = function(profile) {
     profile = String(profile || '').trim().toLowerCase();
@@ -140,8 +158,12 @@ const Personal = (()=>{
       // If sales-active character isn't set yet, fall back to full-active character.
       if (!cid && profile === 'sales') cid = getActiveCharacterId('');
       if (cid) return Security.getTokenExpiration(scopedProps(cid, profile));
-      // Full profile may fall back to legacy keys.
-      if (!profile) return Security.getTokenExpiration(userProperties);
+      // Full profile may fall back to legacy keys, then shared FULL.
+      if (!profile) {
+        var own = Security.getTokenExpiration(userProperties);
+        if (own > 0) return own;
+        return Security.getTokenExpiration(sharedFullProps());
+      }
       return 0;
     },
 
@@ -163,6 +185,18 @@ const Personal = (()=>{
             if (profile === 'sales') {
               throw ('Chybí Sales refresh token pro aktivní charakter. Otevři EVE Data → Login a udělej Sales login.');
             }
+            // For FULL profile, allow shared fallback so users without EVE rights can still run tooling.
+            if (!profile) {
+              try {
+                return Security.getAccessToken(sharedFullProps());
+              } catch (e2) {
+                var msg2 = String(e2);
+                if (msg2.indexOf('Missing refresh token') >= 0) {
+                  throw ('Chybí přihlášení. Nemáš svůj Full token a sdílený Full token není nastavený. Kontaktuj admina, ať udělá Full login a dá „Debug → Copy token → Shared (Full)“.');  
+                }
+                throw e2;
+              }
+            }
             throw ('Chybí Full refresh token pro aktivní charakter. Otevři EVE Data → Login a udělej Full login.');
           }
           throw e;
@@ -182,6 +216,18 @@ const Personal = (()=>{
         } catch (e) {
           var msg = String(e);
           if (msg.indexOf('Missing refresh token') >= 0) {
+            // Shared fallback for FULL profile only.
+            if (!profile) {
+              try {
+                return Security.getAccessToken(sharedFullProps());
+              } catch (e2) {
+                var msg2 = String(e2);
+                if (msg2.indexOf('Missing refresh token') >= 0) {
+                  throw ('Nejsi přihlášený a sdílený Full token není nastavený. Kontaktuj admina, ať udělá Full login a dá „Debug → Copy token → Shared (Full)“.');  
+                }
+                throw e2;
+              }
+            }
             throw ('Nejsi přihlášený. Otevři EVE Data → Login a udělej Full login (a případně i Sales login pro Jita Sales).');
           }
           throw e;

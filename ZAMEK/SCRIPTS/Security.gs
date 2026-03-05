@@ -416,6 +416,37 @@ function copyPersonalTokenToCorporate() {
   if (i) scriptProperties.setProperty("issued", i);
 }
 
+/*
+ * Copies current user's FULL token into shared (ScriptProperties) storage so other users can run tooling
+ * without having their own EVE login (web app / shared sheet use-case).
+ *
+ * NOTE: Anyone who can run this function can overwrite the shared token. Keep it in Debug.
+ */
+function copyPersonalTokenToSharedFull() {
+  var userProperties = PropertiesService.getUserProperties();
+  var scriptProperties = PropertiesService.getScriptProperties();
+
+  // Prefer the active character's stored FULL-profile tokens.
+  var cid = String(userProperties.getProperty('active_character_id') || '').trim();
+  var a = cid ? userProperties.getProperty('access_token:' + cid) : '';
+  var r = cid ? userProperties.getProperty('refresh_token:' + cid) : '';
+  var e = cid ? userProperties.getProperty('expires_in:' + cid) : '';
+  var i = cid ? userProperties.getProperty('issued:' + cid) : '';
+
+  // Fall back to legacy keys.
+  if (!a) a = userProperties.getProperty("access_token");
+  if (!r) r = userProperties.getProperty("refresh_token");
+  if (!e) e = userProperties.getProperty("expires_in");
+  if (!i) i = userProperties.getProperty("issued");
+
+  if (!r) throw ('No personal FULL refresh token found. Do EVE Data → Login (Full) first.');
+
+  scriptProperties.setProperty("shared_full_refresh_token", r);
+  if (a) scriptProperties.setProperty("shared_full_access_token", a);
+  if (e) scriptProperties.setProperty("shared_full_expires_in", e);
+  if (i) scriptProperties.setProperty("shared_full_issued", i);
+}
+
 
 function testGetUserInfo() {
   console.log(Security.getUserInfo());

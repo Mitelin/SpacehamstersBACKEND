@@ -50,6 +50,20 @@ const Corporation = (()=>{
   }
 
   var corpProperties = PropertiesService.getScriptProperties();
+  var sharedFullProps_ = function() {
+    var prefix = 'shared_full_';
+    return {
+      getProperty: function(key) {
+        return corpProperties.getProperty(prefix + key);
+      },
+      setProperty: function(key, value) {
+        return corpProperties.setProperty(prefix + key, value);
+      },
+      deleteProperty: function(key) {
+        return corpProperties.deleteProperty(prefix + key);
+      }
+    };
+  };
 
   const _time = (label, fn) => (typeof Perf !== 'undefined' && Perf.time) ? Perf.time(label, fn) : fn();
   const _TRACE = (() => {
@@ -217,7 +231,17 @@ const Corporation = (()=>{
       } catch (e) {
         var msg = String(e);
         if (msg.indexOf('Missing refresh token') >= 0) {
-          throw ('Corporate token is not set (missing refresh_token). Do: EVE Data → Login → Corporate login.');
+          // Allow using shared FULL token (ScriptProperties) for corporate tooling.
+          // Full login scopes include corp scopes in this sheet.
+          try {
+            return Security.getAccessToken(sharedFullProps_());
+          } catch (e2) {
+            var msg2 = String(e2);
+            if (msg2.indexOf('Missing refresh token') >= 0) {
+              throw ('Corporate token není nastavený a sdílený Full token taky ne. Kontaktuj admina, ať udělá Corporate login nebo Full login + „Debug → Copy token → Shared (Full)“.');  
+            }
+            throw e2;
+          }
         }
         throw ('Corporate token refresh failed. Do: EVE Data → Login → Corporate login. Details: ' + msg);
       }
