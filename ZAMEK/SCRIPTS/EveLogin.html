@@ -4,15 +4,97 @@
     <base target="_top">
   </head>
   <body>
-    <b>Stav přihlášení do EVE</b>
-    <? var data = getLoginStatus(); ?>
+    <b>Přihlášení do EVE</b>
+    <?
+      var data = (this && this.data) ? this.data : {};
+      if (!(this && this.data)) {
+        try {
+          data = getLoginStatusSafe_();
+        } catch (e) {
+          data = {
+            loginUrlSales: '',
+            loginUrlFull: '',
+            expirationSales: 0,
+            expirationFull: 0,
+            error: String(e)
+          };
+        }
+      }
+    ?>
     <br>
-    Platnost přihlášení <?= data.expiration ?> s
+
+    <div style="font-size: 12px; max-width: 920px;">
+      <b>Co je co:</b>
+      <ul style="margin-top: 6px;">
+        <li><b>Sales login</b> = osobní přístup pro prodej v Jitě (tvoje Item Hangar + tvoje market orders + tvoje skills).</li>
+        <li><b>Full login</b> = osobní přístup pro zbytek sheetu (legacy funkce / osobní + některé corp věci podle scope), používá se i jako zdroj pro „Copy token → Corporate“.</li>
+        <li><b>Corporate login</b> = token uložený přímo do <i>corporate storage</i> (ScriptProperties) a používá se pro „Projekty“ a corp tooling.</li>
+      </ul>
+      <div style="margin-top: 6px;">
+        Pozn.: <b>Sales login</b> a <b>Full login</b> jsou tokeny uložené pro tvůj Google účet (UserProperties). <b>Corporate login</b> je sdílený pro celý spreadsheet (ScriptProperties).
+      </div>
+    </div>
+
+    <? if (data && data.error) { ?>
+      <div style="color: #b00020;"><b>Chyba při načítání stavu:</b> <?!= data.error ?></div>
+      <br>
+    <? } ?>
+
     <br>
+
+    <div style="max-width: 920px; padding: 10px 12px; border: 1px solid #ddd;">
+      <div><b>1) Sales login (Jita Sales)</b></div>
+      <div style="font-size: 12px; margin-top: 4px;">
+        Použij, když chceš používat menu <b>EVE Data → Sales → Copy Jita Sell Import</b>.
+        Tenhle login čte <b>tvoje osobní assety</b> (Jita 4-4 Item Hangar), <b>tvoje otevřené market ordery</b> a <b>tvoje skills</b> (kvůli výpočtu volných slotů).
+        Neřeší corp projekty.
+      </div>
+      <div style="margin-top: 6px; font-size: 12px;">
+        Stav: <?= ((data.expirationSales || 0) > 0 ? 'PŘIHLÁŠENO' : 'NEPŘIHLÁŠENO') ?>
+      </div>
+      <a href="<?= (data.loginUrlSales || '') ?>" target="_blank"><img src="https://web.ccpgamescdn.com/eveonlineassets/developers/eve-sso-login-black-large.png"></a>
+      <div style="font-size: 12px;">(otevře nové okno)</div>
+    </div>
+
     <br>
-    <a href="<?= data.loginUrl ?>" target="_blank"><img src="https://web.ccpgamescdn.com/eveonlineassets/developers/eve-sso-login-black-large.png"></a>
+
+    <div style="max-width: 920px; padding: 10px 12px; border: 1px solid #ddd;">
+      <div><b>2) Full login (legacy / osobní)</b></div>
+      <div style="font-size: 12px; margin-top: 4px;">
+        Použij pro zbytek funkcí ve spreadsheetu (starší/legacy části, osobní funkce, a jako základ, když chceš udělat <b>Copy token → Corporate</b>.
+        Pokud se ti u některé funkce objeví problém s tokenem, začni většinou tímhle loginem.
+      </div>
+      <div style="margin-top: 6px; font-size: 12px;">
+        Stav: <?= ((data.expirationFull || 0) > 0 ? 'PŘIHLÁŠENO' : 'NEPŘIHLÁŠENO') ?>
+      </div>
+      <a href="<?= (data.loginUrlFull || '') ?>" target="_blank"><img src="https://web.ccpgamescdn.com/eveonlineassets/developers/eve-sso-login-black-large.png"></a>
+      <div style="font-size: 12px;">(otevře nové okno)</div>
+    </div>
+
     <br>
-    (otevře nové okno)
+
+    <div style="max-width: 920px; padding: 10px 12px; border: 1px solid #ddd;">
+      <div><b>3) Corporate login (Projekty / corp tooling)</b></div>
+      <div style="font-size: 12px; margin-top: 4px;">
+        Použij pro menu <b>EVE Data → Projekty: Aktualizuj vše</b> a další corp tooling.
+        Tenhle login ukládá token do sdíleného corporate storage (ScriptProperties), takže ho používá celý sheet.
+        Přihlas se charakterem, který má potřebné korporátní role/práva.
+      </div>
+      <div style="margin-top: 6px;">
+        Stav corporate tokenu: refresh_token uložen = <?= (data.hasCorpRefreshToken ? 'ANO' : 'NE') ?>
+      </div>
+      <? if (data.corpCharacterName || data.corpCharacterId) { ?>
+        <div style="font-size: 12px;">Aktuálně uložený corporate token: <?!= (data.corpCharacterName || '') ?> <?!= (data.corpCharacterId ? ('(' + data.corpCharacterId + ')') : '') ?></div>
+      <? } ?>
+      <div style="margin-top: 6px;">
+        <a href="<?= (data.loginUrlCorp || '') ?>" target="_blank"><img src="https://web.ccpgamescdn.com/eveonlineassets/developers/eve-sso-login-black-large.png"></a>
+      </div>
+      <div style="font-size: 12px;">(otevře nové okno)</div>
+      <div style="font-size: 12px; margin-top: 4px;">
+        Alternativa (pokud nechceš Corporate login): <b>Full login</b> → menu <b>EVE Data → Debug → Copy token → Corporate</b>.
+      </div>
+    </div>
+
     <br>
     <br>
     <input type="button" value="Zavřít" onclick="google.script.host.close()" />

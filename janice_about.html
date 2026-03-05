@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<base href="/" />
+
+	<link rel="apple-touch-icon-precomposed" sizes="57x57" href="/apple-touch-icon-57x57.png" />
+	<link rel="apple-touch-icon-precomposed" sizes="114x114" href="/apple-touch-icon-114x114.png" />
+	<link rel="apple-touch-icon-precomposed" sizes="72x72" href="/apple-touch-icon-72x72.png" />
+	<link rel="apple-touch-icon-precomposed" sizes="144x144" href="/apple-touch-icon-144x144.png" />
+	<link rel="apple-touch-icon-precomposed" sizes="60x60" href="/apple-touch-icon-60x60.png" />
+	<link rel="apple-touch-icon-precomposed" sizes="120x120" href="/apple-touch-icon-120x120.png" />
+	<link rel="apple-touch-icon-precomposed" sizes="76x76" href="/apple-touch-icon-76x76.png" />
+	<link rel="apple-touch-icon-precomposed" sizes="152x152" href="/apple-touch-icon-152x152.png" />
+	<link rel="icon" type="image/png" href="/favicon-196x196.png" sizes="196x196" />
+	<link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+	<link rel="icon" type="image/png" href="/favicon-32x32.png" sizes="32x32" />
+	<link rel="icon" type="image/png" href="/favicon-16x16.png" sizes="16x16" />
+	<link rel="icon" type="image/png" href="/favicon-128.png" sizes="128x128" />
+	<meta name="application-name" content="Janice"/>
+	<meta name="msapplication-TileColor" content="#FFFFFF" />
+	<meta name="msapplication-TileImage" content="/mstile-144x144.png" />
+	<meta name="msapplication-square70x70logo" content="/mstile-70x70.png" />
+	<meta name="msapplication-square150x150logo" content="/mstile-150x150.png" />
+	<meta name="msapplication-wide310x150logo" content="/mstile-310x150.png" />
+	<meta name="msapplication-square310x310logo" content="/mstile-310x310.png" />
+
+		<title>Janice</title>
+		<meta name="description" content="Your friendly neighborhood space junk worth evaluator." />
+
+	<style>
+		body {
+			padding: 0;
+			margin: 0;
+		}
+
+		.preloader-container {
+			display: flex;
+			width: 100vw;
+			height: 100vh;
+			align-items: center;
+			justify-content: center;
+		}
+
+		.preloader-icon {
+			color: #555;
+			display: inline-block;
+			animation: preloader-icon 0.75s infinite linear;
+			text-rendering: optimizeLegibility;
+			-webkit-font-smoothing: antialiased;
+		}
+
+		@-webkit-keyframes preloader-icon {
+			0% {
+				-webkit-transform: rotate(0deg);
+			}
+
+			100% {
+				-webkit-transform: rotate(360deg);
+			}
+		}
+
+		@keyframes preloader-icon {
+			0% {
+				-webkit-transform: rotate(0deg);
+				transform: rotate(0deg);
+			}
+
+			100% {
+				-webkit-transform: rotate(360deg);
+				transform: rotate(360deg);
+			}
+		}
+	</style>
+	<script>
+		if (localStorage && localStorage.getItem('stylemanager.theme') === 'dark') {
+			var style = document.createElement('style');
+			style.type = 'text/css';
+			style.appendChild(document.createTextNode('body { background-color: #000; }'));
+			document.head.appendChild(style);
+		}
+	</script>
+</head>
+<body>
+
+	<div id="app">
+		<div class="preloader-container">
+			<svg class="preloader-icon" viewBox="0 0 1024 1024" width="50px" height="50px" fill="currentColor">
+				<path d="M988 548c-19.9 0-36-16.1-36-36 0-59.4-11.6-117-34.6-171.3a440.45 440.45 0 0 0-94.3-139.9 437.71 437.71 0 0 0-139.9-94.3C629 83.6 571.4 72 512 72c-19.9 0-36-16.1-36-36s16.1-36 36-36c69.1 0 136.2 13.5 199.3 40.3C772.3 66 827 103 874 150c47 47 83.9 101.8 109.7 162.7 26.7 63.1 40.2 130.2 40.2 199.3.1 19.9-16 36-35.9 36z"></path>
+			</svg>
+		</div>
+	</div>
+
+	<script src="https://unpkg.com/core-js-bundle@3.0.1/minified.js"></script>
+	<script src="https://unpkg.com/whatwg-fetch@3.0.0/dist/fetch.umd.js"></script>
+	
+				<script src="/assets/main.56706183a700d3d88108.js?v=txJVGrYhA8Bs7vKLX3G-jm0e5Xb44USpL1pWhbPZsJc"></script>
+	
+
+	<!-- Global site tag (gtag.js) - Google Analytics -->
+	<script async src="https://www.googletagmanager.com/gtag/js?id=UA-126572437-4"></script>
+	<script>
+		window.dataLayer = window.dataLayer || [];
+		function gtag() { dataLayer.push(arguments); }
+		gtag('js', new Date());
+		gtag('config', 'UA-126572437-4');
+	</script>
+	<!-- Sigh. -->
+	<script>
+		if (typeof Proxy === "undefined" || typeof Symbol === "undefined") {
+			// people are sesitive about browser ordering, idk why..
+			function shuffle(array) {
+				// source: https://stackoverflow.com/questions/2450954/how-to-randomize-shuffle-a-javascript-array
+				for (var i = array.length - 1; i > 0; i--) {
+					var j = Math.floor(Math.random() * (i + 1));
+					var temp = array[i];
+					array[i] = array[j];
+					array[j] = temp;
+				}
+				return array;
+			}
+			var browsers = shuffle([
+				{ url: 'https://www.google.com/chrome', logo: 'https://unpkg.com/@browser-logos/chrome/chrome_128x128.png' },
+				{ url: 'https://www.microsoft.com/edge', logo: 'https://unpkg.com/@browser-logos/edge/edge_128x128.png' },
+				{ url: 'https://www.mozilla.org/firefox', logo: 'https://unpkg.com/@browser-logos/firefox/firefox_128x128.png' },
+				{ url: 'https://www.opera.com', logo: 'https://unpkg.com/@browser-logos/opera/opera_128x128.png' }
+			]);
+			var html = "<div style=\"text-align: center; padding: 5rem; max-width: 800px; margin: auto; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';\">" +
+				"Dear person.<br />" +
+				"<br />" +
+				"Your browser is not capable of displaying this website. It's ok, it's probably just too old for this felgercarb.<br />" +
+				"<br />" +
+				"Please consider upgrading to something bit more recent." +
+				"<br />" +
+				"<br />";
+			for (var i = 0; i < browsers.length; i++) {
+				html = html + "<a href=\"" + browsers[i].url + "\" target=\"_blank\" rel=\"noopener\"><img src=\"" + browsers[i].logo + "\" width=\"64\" height=\"64\" /></a>";
+			}
+			html = html + "<br />" +
+				"</div>";
+			document.getElementById("app").innerHTML = html;
+		}
+	</script>
+</body>
+</html>
+
+<!-- Environment: Production -->
+<!-- Application: E351.Web.Janice, 1.0.0.0 -->
+<!-- Framework: .NETCoreApp,Version=v9.0 -->
+<!-- OS: Microsoft Windows 10.0.17763 X64 -->
+<!-- Machine: CURIOSITY -->
+

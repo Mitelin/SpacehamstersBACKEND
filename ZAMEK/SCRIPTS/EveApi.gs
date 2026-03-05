@@ -27,16 +27,16 @@ globalThis.Eve = globalThis.Eve || (()=>{
   } // default options for API POST call
  
   /* Returns options_get with authorization of current user */
-  var authorized_options_get = function() {
+  var authorized_options_get = function(tokenProfile) {
     let ret = options_get;
-    ret.headers.authorization = "Bearer " + Personal.getAccessToken();
+    ret.headers.authorization = "Bearer " + Personal.getAccessToken(tokenProfile);
     return ret;
   }
 
   /* Returns options_post with authorization of current user */
-  var authorized_options_post = function() {
+  var authorized_options_post = function(tokenProfile) {
     let ret = options_post;
-    ret.headers.authorization = "Bearer " + Personal.getAccessToken();
+    ret.headers.authorization = "Bearer " + Personal.getAccessToken(tokenProfile);
     return ret;
   }
 
@@ -115,6 +115,25 @@ globalThis.Eve = globalThis.Eve || (()=>{
       var data = JSON.parse(json);
 
       return data;
+    },
+
+    /*
+     * Returns global market prices (average/adjusted) for all types.
+     * This endpoint is public (no auth) and is useful as a fast fallback
+     * when per-type Jita pricing is missing.
+     */
+    getMarketPrices: function() {
+      Logger.log('>>> Eve.getMarketPrices()');
+      var url = eveApi + '/markets/prices/?datasource=tranquility';
+      var response = UrlFetchApp.fetch(url, options_get);
+
+      var code = response.getResponseCode();
+      if (code != 200) {
+        throw ('Eve.getMarketPrices() Error: ' + code + ' ' + response.getContentText());
+      }
+
+      var json = response.getContentText();
+      return JSON.parse(json);
     },
 
     /*
@@ -290,7 +309,7 @@ globalThis.Eve = globalThis.Eve || (()=>{
      * characterId: EVE Character ID associated with the user token
      * out: array of characters assets
      */
-    getPersonalAssets: function(characterId) {
+    getPersonalAssets: function(characterId, tokenProfile) {
       Logger.log(">>> Eve.getPersonalAssets (" + characterId + ")");
 
       // prepare paging
@@ -303,7 +322,7 @@ globalThis.Eve = globalThis.Eve || (()=>{
       do {
         // Call EVE Api
         var url = eveApi + '/characters/' + characterId + '/assets/?datasource=tranquility&page=' + page
-        var response = UrlFetchApp.fetch(url, authorized_options_get());
+        var response = UrlFetchApp.fetch(url, authorized_options_get(tokenProfile));
 
         // evaluate response code
         var code = response.getResponseCode();
@@ -340,12 +359,12 @@ globalThis.Eve = globalThis.Eve || (()=>{
      * itemIds: array of number - itemId
      * out: array of characters assets
      */
-    getPersonalAssetsNames: function(characterId, itemIds) {
+    getPersonalAssetsNames: function(characterId, itemIds, tokenProfile) {
       Logger.log(">>> Eve.getPersonalAssetsNames (" + characterId + ")");
 
       // Call EVE Api
       var url = eveApi + '/characters/' + characterId + '/assets/names/?datasource=tranquility'
-      var options = authorized_options_post();
+      var options = authorized_options_post(tokenProfile);
       options.payload = JSON.stringify(itemIds)
       var response = UrlFetchApp.fetch(url, options);
 
@@ -846,6 +865,72 @@ globalThis.Eve = globalThis.Eve || (()=>{
       } while (page <= maxPage);
 
       return {age: age, cacheRefresh: cacheRefresh, data : res};
+    },
+
+    /*
+     * Return personal market orders (open orders)
+     * characterId: optional character ID, defaults to Personal.getId()
+     * out: {age, cacheRefresh, data}
+     */
+    getCharacterMarketOrders: function(characterId, tokenProfile) {
+      Logger.log(">>> Eve.getCharacterMarketOrders ()");
+
+      if (!characterId) characterId = Personal.getId();
+
+      // prepare paging
+      let page = 1;     // queried page
+      let maxPage = 1;  // max pages
+      let res = [];     // full response json
+      let age = 0;      // data age in cache in seconds
+      let cacheRefresh = 0;  // cache refresh in second
+
+      do {
+        var url = eveApi + '/characters/' + characterId + '/orders/?datasource=tranquility&page=' + page;
+        var response = UrlFetchApp.fetch(url, authorized_options_get(tokenProfile));
+
+        var code = response.getResponseCode();
+        if (code != 200) {
+          throw ("Eve.getCharacterMarketOrders() Error: " + code + " " + response.getContentText())
+        }
+
+        var json = response.getContentText();
+        var data = JSON.parse(json);
+        res = res.concat(data);
+
+        let headers = response.getHeaders();
+        maxPage = headers["x-pages"];
+        let expires = Date.parse(headers["Expires"]);
+        let date = Date.parse(headers["Date"]);
+        let lastModified = Date.parse(headers["Last-Modified"]);
+        age = (date - lastModified) / 1000;
+        cacheRefresh = (expires - date) / 1000;
+
+        page++;
+      } while (page <= maxPage);
+
+      return {age: age, cacheRefresh: cacheRefresh, data : res};
+    },
+
+    /*
+     * Return personal skills
+     * characterId: optional character ID, defaults to Personal.getId()
+     * out: JSON { total_sp, skills:[...] }
+     */
+    getCharacterSkills: function(characterId, tokenProfile) {
+      Logger.log(">>> Eve.getCharacterSkills ()");
+
+      if (!characterId) characterId = Personal.getId();
+
+      var url = eveApi + '/characters/' + characterId + '/skills/?datasource=tranquility';
+      var response = UrlFetchApp.fetch(url, authorized_options_get(tokenProfile));
+
+      var code = response.getResponseCode();
+      if (code != 200) {
+        throw ("Eve.getCharacterSkills() Error: " + code + " " + response.getContentText())
+      }
+
+      var json = response.getContentText();
+      return JSON.parse(json);
     },
 
     /*

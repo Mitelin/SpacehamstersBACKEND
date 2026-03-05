@@ -1590,6 +1590,8 @@ const Blueprints = (()=>{
         _time(_sheetName + ' write jobs list (personal)', () => range.setValues(rows));
       }
 
+      SpreadsheetApp.flush();
+
       // recalculate project
       _time(_sheetName + ' recalculate project', () => this.recalculateProject(sheet, notify));
 
@@ -2035,6 +2037,23 @@ function runUpdateProject() {
 
 function runUpdateAllProjects() {
   const _time = (label, fn) => (typeof Perf !== 'undefined' && Perf.time) ? Perf.time(label, fn) : fn();
+
+  // Pre-flight: Projects use corporate token stored in ScriptProperties.
+  // If it was cleared (e.g. after invalid_grant), guide the user to re-login.
+  try {
+    const sp = PropertiesService.getScriptProperties();
+    const rt = sp.getProperty('refresh_token');
+    if (!rt) {
+      SpreadsheetApp.getUi().alert(
+        'Chybí Corporate token pro Projekty.\n\nOtevři EVE Data → Login a klikni Corporate login.\n\nPotom spusť Projekty: Aktualizuj vše znovu.',
+        SpreadsheetApp.getUi().ButtonSet.OK
+      );
+      try { openLogin(); } catch (e) {}
+      return;
+    }
+  } catch (e) {
+    // If UI isn't available, fall through; downstream calls will throw.
+  }
 
   const _toEpochMs = (v) => {
     if (v == null) return null;

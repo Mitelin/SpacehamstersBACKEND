@@ -212,7 +212,15 @@ const Corporation = (()=>{
       return corporationId;
     },
     getAccessToken: function() {
-      return Security.getAccessToken(corpProperties);
+      try {
+        return Security.getAccessToken(corpProperties);
+      } catch (e) {
+        var msg = String(e);
+        if (msg.indexOf('Missing refresh token') >= 0) {
+          throw ('Corporate token is not set (missing refresh_token). Do: EVE Data → Login → Corporate login.');
+        }
+        throw ('Corporate token refresh failed. Do: EVE Data → Login → Corporate login. Details: ' + msg);
+      }
     },
     getTokenExpiration: function() {
       return Security.getTokenExpiration(corpProperties);

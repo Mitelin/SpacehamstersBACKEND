@@ -3,6 +3,10 @@ function onOpen() {
   ui.createMenu('EVE Data')
     .addItem('Login', 'openLogin')
     .addSeparator()
+    .addSubMenu(ui.createMenu('Sales')
+      .addItem('Copy Jita Sell Import', 'salesCopyJitaSellImport')
+      )
+    .addSeparator()
     .addSubMenu(ui.createMenu('Doktrýny')
       .addItem('Import EFT fit (z buňky)', 'doctrinesImportEftFitFromCell')
       .addItem('Import EFT fit (B70:B200)', 'doctrinesImportEftFitFromStaging'))
@@ -24,15 +28,43 @@ function onOpen() {
     .addItem('Projekty: Aktualizuj vše', 'runUpdateAllProjects')
     .addSeparator()
     .addSubMenu(ui.createMenu('Debug')
+      .addItem('Copy token → Corporate', 'copyPersonalTokenToCorporate')
       .addItem('Timing: ON', 'perfTimingEnable')
       .addItem('Timing: OFF', 'perfTimingDisable'))
     .addToUi();
 }
 
 function openLogin() {
-  var html = HtmlService.createTemplateFromFile('EveLogin').evaluate();
+  var tpl = HtmlService.createTemplateFromFile('EveLogin');
+  tpl.data = getLoginStatusSafe_();
+  var html = tpl.evaluate()
+    // Make the dialog fit the richer login descriptions.
+    .setWidth(1020)
+    .setHeight(900);
   SpreadsheetApp.getUi() // Or DocumentApp or SlidesApp or FormApp.
       .showModalDialog(html, 'EVE Login');
+}
+
+function getLoginStatusSafe_() {
+  try {
+    var status = getLoginStatus();
+
+    // Normalize NaN/undefined expirations to 0
+    if (!isFinite(Number(status.expirationFull))) status.expirationFull = 0;
+    if (!isFinite(Number(status.expirationSales))) status.expirationSales = 0;
+    if (!status.loginUrlSales) status.loginUrlSales = '';
+    if (!status.loginUrlFull) status.loginUrlFull = '';
+    status.error = '';
+    return status;
+  } catch (e) {
+    return {
+      loginUrlSales: '',
+      loginUrlFull: '',
+      expirationSales: 0,
+      expirationFull: 0,
+      error: String(e)
+    };
+  }
 }
 
 function getLoginStatus() {
@@ -46,8 +78,43 @@ function getLoginStatus() {
   }
   
   var status = {}
-  status.loginUrl = Security.eveLoginUrl();
-  status.expiration = Personal.getTokenExpiration();
+  status.loginUrlFull = Security.eveLoginUrl('');
+  status.loginUrlSales = Security.eveLoginUrl('sales');
+  status.loginUrlCorp = Security.eveLoginUrl('corp');
+  // Backward compatibility
+  status.loginUrl = status.loginUrlSales;
+
+  // Debug: show what OAuth config the script actually uses
+  status.clientId = Security.getClientId();
+  status.clientIdSource = Security.getClientIdSource();
+  status.redirectUri = Security.getRedirectUri();
+  status.scopesSales = Security.getScopes('sales');
+  status.scopesFull = Security.getScopes('');
+
+  status.expirationFull = Personal.getTokenExpiration();
+  status.expirationSales = Personal.getTokenExpiration('sales');
+  status.expiration = status.expirationSales;
+
+  // Corporate token (stored in ScriptProperties) used by Projects/Corp tooling.
+  try {
+    status.expirationCorp = (typeof Corporation !== 'undefined' && Corporation.getTokenExpiration)
+      ? Corporation.getTokenExpiration()
+      : 0;
+  } catch (e) {
+    status.expirationCorp = 0;
+  }
+  try {
+    status.hasCorpRefreshToken = PropertiesService.getScriptProperties().getProperty('refresh_token') ? 1 : 0;
+  } catch (e) {
+    status.hasCorpRefreshToken = 0;
+  }
+  try {
+    status.corpCharacterName = PropertiesService.getScriptProperties().getProperty('corp_character_name') || '';
+    status.corpCharacterId = PropertiesService.getScriptProperties().getProperty('corp_character_id') || '';
+  } catch (e) {
+    status.corpCharacterName = '';
+    status.corpCharacterId = '';
+  }
   
   return status;
 }

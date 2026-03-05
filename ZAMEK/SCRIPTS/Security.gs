@@ -7,30 +7,239 @@ const Security = (()=>{
   const eveSsoUrl = 'https://login.eveonline.com/v2/oauth/authorize?response_type=code'
   const eveTokenApi = 'https://login.eveonline.com/v2/oauth/token'
   const eveUserApi = 'https://login.eveonline.com/v2/oauth/verify'
-  const scriptUrl = 'https://script.google.com/macros/d/1hZ_YxV-xgrgSRWEzpRHd6m6VFUKs-Ut8BwK0_Q4EQzV1GjOnvZO-ber4/usercallback';
-  const scopes = 'esi-markets.read_corporation_orders.v1 esi-universe.read_structures.v1 esi-wallet.read_corporation_wallets.v1 esi-wallet.read_corporation_wallet.v1 esi-corporations.read_container_logs.v1 esi-assets.read_corporation_assets.v1 esi-industry.read_corporation_jobs.v1 esi-assets.read_assets.v1 esi-industry.read_character_jobs.v1 esi-corporations.read_blueprints.v1 esi-markets.structure_markets.v1 esi-search.search_structures.v1 esi-contracts.read_corporation_contracts.v1 esi-contracts.read_character_contracts.v1'
-  const clientID = '7d2a7aff316448d497ca69f4b9f0cb6e'
+  var getScriptUrl_ = function() {
+    // OAuth redirect for Apps Script StateToken callbacks.
+    // Use current project Script ID so copies of the project keep working.
+    return 'https://script.google.com/macros/d/' + ScriptApp.getScriptId() + '/usercallback';
+  }
+  // NOTE: EVE SSO validates scopes only after login; keeping scopes small improves reliability.
+  // Full login (legacy): keep existing corp tooling working.
+  // IMPORTANT: `esi-markets.read_character_orders.v1` is requested via the separate Sales login.
+  const scopesFull = 'esi-markets.read_corporation_orders.v1 esi-skills.read_skills.v1 esi-universe.read_structures.v1 esi-wallet.read_corporation_wallets.v1 esi-corporations.read_container_logs.v1 esi-assets.read_corporation_assets.v1 esi-industry.read_corporation_jobs.v1 esi-assets.read_assets.v1 esi-industry.read_character_jobs.v1 esi-corporations.read_blueprints.v1 esi-markets.structure_markets.v1 esi-search.search_structures.v1 esi-contracts.read_corporation_contracts.v1 esi-contracts.read_character_contracts.v1'
+  // Sales login: minimal personal scopes needed by Sales.gs
+  const scopesSales = 'esi-assets.read_assets.v1 esi-skills.read_skills.v1 esi-markets.read_character_orders.v1'
+  // Corporate login: stores tokens into ScriptProperties for corp tooling (Projects).
+  // Keep scopes aligned with Full to avoid accidental capability loss.
+  const scopesCorp = scopesFull;
+  const clientIDFromProps = PropertiesService.getScriptProperties().getProperty('EVE_CLIENT_ID')
+  // Fallback client id should point at the primary app registration for this sheet.
+  const clientID = clientIDFromProps || 'f30674c36daf42e59a64011c41018cc7'
+  const clientIdSource = clientIDFromProps ? 'scriptProperties' : 'fallback'
   const clientSecret = PropertiesService.getScriptProperties().getProperty('EVE_CLIENT_SECRET')
 
+  const PROFILE_FULL = '';
+  const PROFILE_SALES = 'sales';
+  const PROFILE_CORP = 'corp';
+
+  var normalizeScopes = function(scopeStr) {
+    return String(scopeStr || '').replace(/\s+/g, ' ').trim();
+  }
+
+  var scopeForProfile = function(profile) {
+    profile = String(profile || '').trim().toLowerCase();
+    if (profile === PROFILE_SALES) return scopesSales;
+    if (profile === PROFILE_CORP) return scopesCorp;
+    return scopesFull;
+  }
+
+  var callbackMethodForProfile = function(profile) {
+    profile = String(profile || '').trim().toLowerCase();
+    if (profile === PROFILE_SALES) return 'eveCallbackSales';
+    if (profile === PROFILE_CORP) return 'eveCallbackCorp';
+    return 'eveCallbackFull';
+  }
+
+  var profileSuffixForCharacter = function(profile) {
+    profile = String(profile || '').trim().toLowerCase();
+    return profile ? (':' + profile) : '';
+  }
+
+  var activeCharacterKeyForProfile = function(profile) {
+    profile = String(profile || '').trim().toLowerCase();
+    if (profile === PROFILE_SALES) return 'active_character_id_sales';
+    return 'active_character_id';
+  }
+
+  // Decode basic character info from EVE access token (JWT) without verifying signature.
+  // We only use it to derive character_id/name for storage/selection.
+  var decodeTokenInfo = function(accessToken) {
+    try {
+      if (!accessToken) return null;
+      let body = accessToken.split('.')[1];
+      let decoded = Utilities.newBlob(Utilities.base64Decode(body)).getDataAsString();
+      let json = JSON.parse(decoded);
+      return {
+        name: json.name,
+        character_id: String(json.sub).split(':')[2]
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  var storeCharacterTokens = function(userProperties, cid, data, profile) {
+    var suffix = profileSuffixForCharacter(profile);
+    userProperties.setProperty(activeCharacterKeyForProfile(profile), cid);
+
+    userProperties.setProperty('access_token:' + cid + suffix, data.access_token);
+    userProperties.setProperty('refresh_token:' + cid + suffix, data.refresh_token);
+    userProperties.setProperty('expires_in:' + cid + suffix, data.expires_in);
+    userProperties.setProperty('issued:' + cid + suffix, new Date());
+  }
+
+  var storeCorpTokens = function(scriptProperties, data) {
+    scriptProperties.setProperty('access_token', data.access_token);
+    scriptProperties.setProperty('refresh_token', data.refresh_token);
+    scriptProperties.setProperty('expires_in', data.expires_in);
+    scriptProperties.setProperty('issued', new Date());
+
+    var info = decodeTokenInfo(data.access_token);
+    if (info && info.character_id) scriptProperties.setProperty('corp_character_id', String(info.character_id));
+    if (info && info.name) scriptProperties.setProperty('corp_character_name', String(info.name));
+  }
+
+  var handleCallback = function(e, profile) {
+    // extract code or error
+    var code = e && e.parameters && e.parameters.code ? e.parameters.code[0] : null;
+    var error = e && e.parameters ? e.parameters.error : null;
+
+    if (code) {
+      if (!clientSecret) throw('EVE_CLIENT_SECRET is not set in Script Properties')
+      var req = {}
+      req.grant_type = "authorization_code";
+      req.code = code;
+
+      // POST request to EVE token API
+      var options = {
+        'method' : 'post',
+        'contentType': 'application/x-www-form-urlencoded',
+        "headers" : {
+          'Authorization': 'Basic ' + Utilities.base64Encode(clientID + ':' + clientSecret)
+        },
+        'payload' : req
+      };
+      var response = UrlFetchApp.fetch(eveTokenApi, options);
+
+      // parsuj odpoved do pole struktur
+      var json = response.getContentText();
+      var data = JSON.parse(json);
+      var userProperties = PropertiesService.getUserProperties()
+
+      var info = decodeTokenInfo(data.access_token);
+      var cid = info && info.character_id ? String(info.character_id) : '';
+      if (cid) {
+        storeCharacterTokens(userProperties, cid, data, profile);
+
+        // Legacy keys are used all over the old codebase.
+        // Keep them aligned ONLY for the full profile.
+        if (!profile) {
+          userProperties.setProperty("access_token", data.access_token);
+          userProperties.setProperty("refresh_token", data.refresh_token);
+          userProperties.setProperty("expires_in", data.expires_in);
+          userProperties.setProperty("issued", new Date());
+        }
+      }
+
+      // zapis access token do Industry databaze (legacy)
+      if (!profile) {
+        Aubi.syncUser(data);
+      }
+
+      return HtmlService.createHtmlOutput('<b>Success. You can close this window. !</b>')
+    }
+
+    if (error) {
+      return HtmlService.createHtmlOutput('<b>Failed: ' + error + '. You can close this window. !</b>')
+    }
+    return HtmlService.createHtmlOutput('<b>Failed. You can close this window. !</b>')
+  }
+
+  var handleCallbackCorp = function(e) {
+    var code = e && e.parameters && e.parameters.code ? e.parameters.code[0] : null;
+    var error = e && e.parameters ? e.parameters.error : null;
+
+    if (code) {
+      if (!clientSecret) throw('EVE_CLIENT_SECRET is not set in Script Properties')
+      var req = {}
+      req.grant_type = 'authorization_code';
+      req.code = code;
+
+      var options = {
+        'method': 'post',
+        'contentType': 'application/x-www-form-urlencoded',
+        'headers': {
+          'Authorization': 'Basic ' + Utilities.base64Encode(clientID + ':' + clientSecret)
+        },
+        'payload': req,
+        'muteHttpExceptions': true
+      };
+
+      var response = UrlFetchApp.fetch(eveTokenApi, options);
+      var status = response.getResponseCode();
+      var json = response.getContentText();
+      var data;
+      try { data = JSON.parse(json); } catch (e) { data = null; }
+
+      if (status !== 200) {
+        var err = data && data.error ? String(data.error) : ('HTTP ' + status);
+        var desc = data && data.error_description ? String(data.error_description) : json;
+        throw ('EVE SSO corp login failed: ' + err + (desc ? (' - ' + desc) : ''));
+      }
+
+      var scriptProperties = PropertiesService.getScriptProperties();
+      storeCorpTokens(scriptProperties, data);
+      return HtmlService.createHtmlOutput('<b>Success (Corporate). You can close this window.</b>')
+    }
+
+    if (error) {
+      return HtmlService.createHtmlOutput('<b>Failed: ' + error + '. You can close this window.</b>')
+    }
+    return HtmlService.createHtmlOutput('<b>Failed. You can close this window.</b>')
+  }
+
   return {
+    // Debug helpers for UI
+    getClientId: function() {
+      return clientID;
+    },
+
+    getClientIdSource: function() {
+      return clientIdSource;
+    },
+
+    getRedirectUri: function() {
+      return getScriptUrl_();
+    },
+
+    getScopes: function(profile) {
+      return normalizeScopes(scopeForProfile(profile));
+    },
+
     /*
     * Generates EVE Login URL with state leading to eveCallback function invocation
     */
-    eveLoginUrl: function() {
+    eveLoginUrl: function(profile) {
       Logger.log ('### Security.eveLoginUrl() called ...')
+
+      profile = String(profile || '').trim().toLowerCase();
+      var methodName = callbackMethodForProfile(profile);
+      var normalizedScopes = normalizeScopes(scopeForProfile(profile));
 
       // generate the EVE login URL
       var stateToken = ScriptApp.newStateToken()
-        .withMethod('eveCallback')
+        .withMethod(methodName)
         .withTimeout(120)
         .createToken();
 
       var url = eveSsoUrl
-              + '&redirect_uri=' + scriptUrl 
-              + '&state=' + stateToken
-              + '&client_id=' + clientID
-              + '&scope=' + encodeURIComponent(scopes)
+        + '&redirect_uri=' + encodeURIComponent(getScriptUrl_())
+        + '&state=' + encodeURIComponent(stateToken)
+        + '&client_id=' + encodeURIComponent(clientID)
+        + '&scope=' + encodeURIComponent(normalizedScopes)
 
+      Logger.log('### EVE SSO profile: ' + (profile || 'full'))
+      Logger.log('### EVE SSO scopes: ' + normalizedScopes)
+      Logger.log('### EVE SSO login URL: ' + url)
       console.log(url);
       return url;
     },
@@ -38,47 +247,17 @@ const Security = (()=>{
     /*
     * Callback function to be invoked after EVE OAuth login is completed
     */
-    eveCallback: function(e) {
-      // extract code or error
-      var code = e.parameters.code[0];
-      var error = e.parameters.error;
+    eveCallbackFull: function(e) {
+      return handleCallback(e, PROFILE_FULL);
+    },
 
-      if (code) {
-        if (!clientSecret) throw('EVE_CLIENT_SECRET is not set in Script Properties')
-        var req = {}
-        req.grant_type = "authorization_code";
-        req.code = code;
+    eveCallbackSales: function(e) {
+      return handleCallback(e, PROFILE_SALES);
+    },
 
-        // POST request to EVE token API
-        var options = {
-          'method' : 'post',
-          'contentType': 'application/x-www-form-urlencoded',
-          "headers" : {    
-            'Authorization': 'Basic ' + Utilities.base64Encode(clientID + ':' + clientSecret)
-          },
-          'payload' : req
-        };
-        var response = UrlFetchApp.fetch(eveTokenApi, options);
-
-        // parsuj odpoved do pole struktur
-        var json = response.getContentText();
-        var data = JSON.parse(json);
-        var userProperties = PropertiesService.getUserProperties()
-
-        userProperties.setProperty("access_token", data.access_token);
-        userProperties.setProperty("refresh_token", data.refresh_token);
-        userProperties.setProperty("expires_in", data.expires_in);
-        userProperties.setProperty("issued", new Date());
-
-        // zapis access token do Industry databaze
-        Aubi.syncUser(data);
-
-        return HtmlService.createHtmlOutput('<b>Success. You can close this window. !</b>')
-      } else {
-        return HtmlService.createHtmlOutput('<b>Failed. You can close this window. !</b>')
-
-      }
-    }, 
+    eveCallbackCorp: function(e) {
+      return handleCallbackCorp(e);
+    },
 
     /*
     * Retrieves the access_token from properties
@@ -94,6 +273,10 @@ const Security = (()=>{
         req.grant_type = "refresh_token";
         req.refresh_token = properties.getProperty("refresh_token");
 
+        if (!req.refresh_token) {
+          throw('Missing refresh token.');
+        }
+
         // POST request to EVE token API
         var options = {
           'method' : 'post',
@@ -101,17 +284,46 @@ const Security = (()=>{
           "headers" : {    
             'Authorization': 'Basic ' + Utilities.base64Encode(clientID + ':' + clientSecret)
           },
-          'payload' : req
+          'payload' : req,
+          // Allow reading error body for invalid_grant etc.
+          'muteHttpExceptions': true
         };
         var response = UrlFetchApp.fetch(eveTokenApi, options);
 
+        var status = response.getResponseCode();
+
         // parsuj odpoved do pole struktur
         var json = response.getContentText();
-        var data = JSON.parse(json);
+        var data;
+        try {
+          data = JSON.parse(json);
+        } catch (e) {
+          data = null;
+        }
+
+        if (status !== 200) {
+          var err = data && data.error ? String(data.error) : ('HTTP ' + status);
+          var desc = data && data.error_description ? String(data.error_description) : json;
+
+          // If refresh token is invalid/revoked, clear stored tokens so next run forces re-auth.
+          if (String(err).toLowerCase() === 'invalid_grant') {
+            try { if (properties.deleteProperty) properties.deleteProperty('refresh_token'); } catch (e) {}
+            try { if (properties.deleteProperty) properties.deleteProperty('access_token'); } catch (e) {}
+            try { if (properties.deleteProperty) properties.deleteProperty('expires_in'); } catch (e) {}
+            try { if (properties.deleteProperty) properties.deleteProperty('issued'); } catch (e) {}
+          }
+
+          throw ('EVE SSO refresh failed: ' + err + (desc ? (' - ' + desc) : ''));
+        }
 
         properties.setProperty("access_token", data.access_token);
         properties.setProperty("expires_in", data.expires_in);
         properties.setProperty("issued", new Date());
+
+        // Some OAuth servers rotate refresh tokens. Persist a new one if provided.
+        if (data && data.refresh_token) {
+          properties.setProperty("refresh_token", data.refresh_token);
+        }
 
         return data.access_token
       } else {
@@ -123,11 +335,18 @@ const Security = (()=>{
     * Calculates the token expiration time
     */
     getTokenExpiration: function(properties) {
-      var issued = Date.parse(properties.getProperty("issued"));
-      var expiresIn = parseInt(properties.getProperty("expires_in"));
+      var issuedRaw = properties.getProperty("issued");
+      var expiresRaw = properties.getProperty("expires_in");
+
+      var issued = Date.parse(issuedRaw);
+      var expiresIn = parseInt(expiresRaw);
       var now = Date.parse(Date())
 
+      // Missing/invalid values should force refresh.
+      if (!isFinite(issued) || !isFinite(expiresIn) || expiresIn <= 0) return 0;
+
       var diffInSeconds = (now - issued) / 1000;
+      if (!isFinite(diffInSeconds)) return 0;
       return Math.max(expiresIn - diffInSeconds, 0);
     },
 
@@ -153,7 +372,20 @@ const Security = (()=>{
  * Callback function to be invoked after EVE OAuth login is completed
  */
 function eveCallback(e) {
-  return Security.eveCallback(e);
+  // Backward compatibility: old state tokens call `eveCallback`.
+  return Security.eveCallbackFull(e);
+}
+
+function eveCallbackFull(e) {
+  return Security.eveCallbackFull(e);
+}
+
+function eveCallbackSales(e) {
+  return Security.eveCallbackSales(e);
+}
+
+function eveCallbackCorp(e) {
+  return Security.eveCallbackCorp(e);
 }
 
 /*
@@ -163,10 +395,25 @@ function copyPersonalTokenToCorporate() {
   var userProperties = PropertiesService.getUserProperties();
   var scriptProperties = PropertiesService.getScriptProperties();
 
-  scriptProperties.setProperty("refresh_token", userProperties.getProperty("refresh_token"));
-  scriptProperties.setProperty("access_token", userProperties.getProperty("access_token"));
-  scriptProperties.setProperty("expires_in", userProperties.getProperty("expires_in"));
-  scriptProperties.setProperty("issued", userProperties.getProperty("issued"));
+  // Prefer the active character's stored FULL-profile tokens.
+  var cid = String(userProperties.getProperty('active_character_id') || '').trim();
+  var a = cid ? userProperties.getProperty('access_token:' + cid) : '';
+  var r = cid ? userProperties.getProperty('refresh_token:' + cid) : '';
+  var e = cid ? userProperties.getProperty('expires_in:' + cid) : '';
+  var i = cid ? userProperties.getProperty('issued:' + cid) : '';
+
+  // Fall back to legacy keys.
+  if (!a) a = userProperties.getProperty("access_token");
+  if (!r) r = userProperties.getProperty("refresh_token");
+  if (!e) e = userProperties.getProperty("expires_in");
+  if (!i) i = userProperties.getProperty("issued");
+
+  if (!r) throw ('No personal FULL refresh token found. Do EVE Data → Login (Full) first. (Sales login tokens are stored separately and are not used for corporate tooling.)');
+
+  scriptProperties.setProperty("refresh_token", r);
+  if (a) scriptProperties.setProperty("access_token", a);
+  if (e) scriptProperties.setProperty("expires_in", e);
+  if (i) scriptProperties.setProperty("issued", i);
 }
 
 

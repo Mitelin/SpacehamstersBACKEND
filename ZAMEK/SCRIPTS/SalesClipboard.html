@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: Arial, sans-serif; }
+      textarea { width: 100%; height: 290px; font-family: Consolas, monospace; font-size: 12px; }
+      .row { display: flex; gap: 8px; margin-top: 8px; }
+      .meta { margin: 4px 0 6px; font-size: 12px; color: #333; }
+      button { padding: 6px 10px; }
+      .hint { color: #555; font-size: 12px; margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <div>
+      <div class="meta"><strong>Zaznamu:</strong> <span id="count">0</span></div>
+      <div class="meta"><strong>consumedCount (SOLD):</strong> <span id="consumed">0</span></div>
+      <div class="meta"><strong>X = min(freeSlots, inputRows):</strong> min(<span id="freeSlots">0</span>, <span id="inputRows">0</span>) = <span id="xVal">0</span></div>
+      <textarea id="t"><?!= payload ?></textarea>
+      <div class="row">
+        <button onclick="copyNow()">Copy</button>
+        <button onclick="soldNow()">SOLD</button>
+        <button onclick="google.script.host.close()">Close</button>
+      </div>
+      <div class="hint">Tip: když Copy nefunguje (browser policy), označ vše v textu a Ctrl+C.</div>
+    </div>
+
+    <script>
+      function selectAll() {
+        var t = document.getElementById('t');
+        t.focus();
+        t.select();
+      }
+
+      function countRows(txt) {
+        if (!txt) return 0;
+        return String(txt).split(/\r?\n/).filter(function(line) {
+          return String(line || '').trim() !== '';
+        }).length;
+      }
+
+      function refreshCount() {
+        var t = document.getElementById('t');
+        var c = document.getElementById('count');
+        if (!t || !c) return;
+        c.textContent = String(countRows(t.value));
+
+        var consumed = Number('<?= consumedCount ?>') || 0;
+        var freeSlots = Number('<?= freeSlots ?>') || 0;
+        var inputRows = Number('<?= inputRowsCount ?>') || 0;
+
+        var c2 = document.getElementById('consumed');
+        var fs = document.getElementById('freeSlots');
+        var ir = document.getElementById('inputRows');
+        var xv = document.getElementById('xVal');
+        if (c2) c2.textContent = String(consumed);
+        if (fs) fs.textContent = String(freeSlots);
+        if (ir) ir.textContent = String(inputRows);
+        if (xv) xv.textContent = String(consumed);
+      }
+
+      async function copyNow() {
+        selectAll();
+        var txt = document.getElementById('t').value || '';
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(txt);
+            return;
+          }
+        } catch (e) {}
+        // Fallback: keep selection so user can Ctrl+C
+      }
+
+      function soldNow() {
+        var cnt = Number('<?= consumedCount ?>') || 0;
+        if (!(cnt > 0)) {
+          alert('SOLD: neni co odecist.');
+          return;
+        }
+        if (!confirm('Smazat prvnich ' + cnt + ' pouzitych polozek a posunout zbytek nahoru?')) return;
+
+        google.script.run
+          .withSuccessHandler(function(msg) {
+            try { if (msg) alert(msg); } catch (e) {}
+            google.script.host.close();
+          })
+          .withFailureHandler(function(err) {
+            alert('SOLD chyba: ' + (err && err.message ? err.message : err));
+          })
+          .salesMarkSold(cnt);
+      }
+
+      // Auto-select for quick Ctrl+C
+      var t0 = document.getElementById('t');
+      if (t0) t0.addEventListener('input', refreshCount);
+      refreshCount();
+      setTimeout(selectAll, 50);
+    </script>
+  </body>
+</html>
