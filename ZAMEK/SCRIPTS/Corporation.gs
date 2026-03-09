@@ -1270,7 +1270,8 @@ const Corporation = (()=>{
 
       // filter by status
       if (!all) {
-        // filter active jobs or jobs delivered after assets/blueprints cache validity
+          // Default jobs view is strictly "running" jobs.
+          // Recently delivered jobs are compensated separately in Blueprints.gs against stale asset/blueprint caches.
         let jobsFilteredActive = jobsFiltered.filter(
           item => item.status == 'active' 
 //          || (item.completedTime > assetsLastModified && (item.activityName == "Manufacturing" || item.activityName == "Reaction"))

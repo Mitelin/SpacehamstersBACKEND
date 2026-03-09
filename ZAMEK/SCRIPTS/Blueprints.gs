@@ -24,6 +24,75 @@ const Blueprints = (()=>{
     console.log(...args);
   };
 
+  const normalizeIndustryKeyPart = function(value) {
+    if (value == null) return '';
+    return String(value)
+      .replace(/[\s\u00A0]+/g, ' ')
+      .trim()
+      .toLowerCase();
+  };
+
+  const buildBlueprintNameAliases = function(value) {
+    const normalized = normalizeIndustryKeyPart(value);
+    if (!normalized) return [];
+
+    const aliases = [];
+    const seen = new Set();
+    const push = function(alias) {
+      const v = normalizeIndustryKeyPart(alias);
+      if (!v || seen.has(v)) return;
+      seen.add(v);
+      aliases.push(v);
+    };
+
+    push(normalized);
+
+    if (normalized.endsWith(' blueprint')) {
+      const base = normalized.slice(0, -' blueprint'.length).trim();
+      push(base);
+    } else if (normalized.endsWith(' reaction formula')) {
+      const base = normalized.slice(0, -' reaction formula'.length).trim();
+      push(base);
+      push(base + ' formula');
+    } else if (normalized.endsWith(' formula')) {
+      const base = normalized.slice(0, -' formula'.length).trim();
+      push(base);
+      push(base + ' reaction formula');
+    } else {
+      push(normalized + ' blueprint');
+      push(normalized + ' reaction formula');
+      push(normalized + ' formula');
+    }
+
+    return aliases;
+  };
+
+  const buildProductBlueprintActionKeys = function(productName, blueprintName, actionName) {
+    const productKey = normalizeIndustryKeyPart(productName);
+    const actionKey = normalizeIndustryKeyPart(actionName);
+    if (!productKey || !actionKey) return [];
+
+    return buildBlueprintNameAliases(blueprintName).map(blueprintKey => (
+      productKey + '\u0000' + blueprintKey + '\u0000' + actionKey
+    ));
+  };
+
+  const buildBlueprintActionKeys = function(blueprintName, actionName) {
+    const actionKey = normalizeIndustryKeyPart(actionName);
+    if (!actionKey) return [];
+
+    return buildBlueprintNameAliases(blueprintName).map(blueprintKey => (
+      blueprintKey + '|' + actionKey
+    ));
+  };
+
+  const buildProductActionKey = function(productName, actionName) {
+    const productKey = normalizeIndustryKeyPart(productName);
+    const actionKey = normalizeIndustryKeyPart(actionName);
+    if (!productKey || !actionKey) return '';
+    return productKey + '|' + actionKey;
+  };
+
   /* 
   * Overi, jestli je povolene z aktivniho sheetu spoustet blueprint funkce
   */
@@ -115,15 +184,21 @@ const Blueprints = (()=>{
     if (!plannedJobs || plannedJobs.length === 0 || !deliveredJobs || deliveredJobs.length === 0) return ret;
 
     // Build (and cache) planned job index once per plannedJobs array.
-    // Keyed by productName + \u0000 + blueprintName; value is the first row index (findIndex semantics).
-    if (!plannedJobs.__indexByProductAndBlueprint) {
+    // Keyed by normalized productName + blueprintName + activityName.
+    if (!plannedJobs.__indexByProductBlueprintAction) {
       const index = {};
+      const byProductAction = {};
       for (let i = 0; i < plannedJobs.length; i++) {
         const row = plannedJobs[i];
-        const key = String(row[0]) + '\u0000' + String(row[1]);
-        if (index[key] == null) index[key] = i;
+        const keys = buildProductBlueprintActionKeys(row[0], row[1], row[3]);
+        keys.forEach(key => {
+          if (index[key] == null) index[key] = i;
+        });
+        const productActionKey = buildProductActionKey(row[0], row[3]);
+        if (productActionKey && byProductAction[productActionKey] == null) byProductAction[productActionKey] = i;
       }
-      plannedJobs.__indexByProductAndBlueprint = index;
+      plannedJobs.__indexByProductBlueprintAction = index;
+      plannedJobs.__indexByProductAction = byProductAction;
     }
 
     // filter delivered jobs for output location in selected hangar
@@ -151,8 +226,16 @@ const Blueprints = (()=>{
 //     console.log(job);
 
       // find blueprint info
-        const key = String(job.productName) + '\u0000' + String(job.blueprintName);
-        var plannedJob = plannedJobs.__indexByProductAndBlueprint[key];
+        const keys = buildProductBlueprintActionKeys(job.productName, job.blueprintName, job.activityName);
+        var plannedJob = null;
+        for (let i = 0; i < keys.length; i++) {
+          plannedJob = plannedJobs.__indexByProductBlueprintAction[keys[i]];
+          if (plannedJob != null) break;
+        }
+        if (plannedJob == null && plannedJobs.__indexByProductAction) {
+          const productActionKey = buildProductActionKey(job.productName, job.activityName);
+          if (productActionKey) plannedJob = plannedJobs.__indexByProductAction[productActionKey];
+        }
   //    console.log(plannedJob);
         if (plannedJob != null) {
           let batchSize = plannedJobs[plannedJob][8];
@@ -191,14 +274,20 @@ const Blueprints = (()=>{
     if (!plannedJobs || plannedJobs.length === 0 || !newJobs || newJobs.length === 0) return ret;
 
     // Cache planned jobs index (shared with getFinishedJobProducts).
-    if (!plannedJobs.__indexByProductAndBlueprint) {
+    if (!plannedJobs.__indexByProductBlueprintAction) {
       const index = {};
+      const byProductAction = {};
       for (let i = 0; i < plannedJobs.length; i++) {
         const row = plannedJobs[i];
-        const key = String(row[0]) + '\u0000' + String(row[1]);
-        if (index[key] == null) index[key] = i;
+        const keys = buildProductBlueprintActionKeys(row[0], row[1], row[3]);
+        keys.forEach(key => {
+          if (index[key] == null) index[key] = i;
+        });
+        const productActionKey = buildProductActionKey(row[0], row[3]);
+        if (productActionKey && byProductAction[productActionKey] == null) byProductAction[productActionKey] = i;
       }
-      plannedJobs.__indexByProductAndBlueprint = index;
+      plannedJobs.__indexByProductBlueprintAction = index;
+      plannedJobs.__indexByProductAction = byProductAction;
     }
 
     // Cache blueprint ME by itemId.
@@ -216,8 +305,16 @@ const Blueprints = (()=>{
     newJobs.forEach(job => {
   //   console.log(job);
       // find blueprint info
-      const key = String(job.productName) + '\u0000' + String(job.blueprintName);
-      var plannedJob = plannedJobs.__indexByProductAndBlueprint[key];
+      const keys = buildProductBlueprintActionKeys(job.productName, job.blueprintName, job.activityName);
+      var plannedJob = null;
+      for (let i = 0; i < keys.length; i++) {
+        plannedJob = plannedJobs.__indexByProductBlueprintAction[keys[i]];
+        if (plannedJob != null) break;
+      }
+      if (plannedJob == null && plannedJobs.__indexByProductAction) {
+        const productActionKey = buildProductActionKey(job.productName, job.activityName);
+        if (productActionKey) plannedJob = plannedJobs.__indexByProductAction[productActionKey];
+      }
   //    console.log(plannedJob);
       if (plannedJob != null) {
           let materials = plannedJobs[plannedJob][7];
@@ -505,19 +602,26 @@ const Blueprints = (()=>{
       // Build lookup maps to avoid repeated O(n) findIndex/find
       const plannedIndexByProduct = new Map();
       const plannedIndexByBlueprintAction = new Map();
+      const plannedIndexByProductAction = new Map();
       for (let r = 0; r < plannedCount; r++) {
         const productName = plannedJobs[r][0];
         if (productName && !plannedIndexByProduct.has(productName)) {
           plannedIndexByProduct.set(productName, r);
         }
+        const productActionKey = buildProductActionKey(plannedJobs[r][0], plannedJobs[r][3]);
+        if (productActionKey && !plannedIndexByProductAction.has(productActionKey)) {
+          plannedIndexByProductAction.set(productActionKey, r);
+        }
 
         const blueprintName = plannedJobs[r][1];
         const actionName = plannedJobs[r][3];
         if (blueprintName && actionName) {
-          const key = blueprintName + '|' + actionName;
-          if (!plannedIndexByBlueprintAction.has(key)) {
-            plannedIndexByBlueprintAction.set(key, r);
-          }
+          const keys = buildBlueprintActionKeys(blueprintName, actionName);
+          keys.forEach(key => {
+            if (!plannedIndexByBlueprintAction.has(key)) {
+              plannedIndexByBlueprintAction.set(key, r);
+            }
+          });
         }
       }
       const inputIndexByName = new Map();
@@ -574,7 +678,7 @@ const Blueprints = (()=>{
       _time(_sheetName + ' recalc read running jobs', () => {
         const rowsToRead = Math.min(maxJobs, Math.max(0, lastRow - firstDataRow + 1));
         if (rowsToRead > 0) {
-          var range = sheet.getRange(firstDataRow, colJobsList, rowsToRead, 5);
+          var range = sheet.getRange(firstDataRow, colJobsList, rowsToRead, 6);
           jobs = range.getValues();
         } else {
           jobs = [];
@@ -585,8 +689,20 @@ const Blueprints = (()=>{
         jobs.forEach(job => {
           if (job[3]) {
             // find corresponding row in planned jobs
-            const key = job[3] + '|' + job[2];
-            const plannedJob = plannedIndexByBlueprintAction.has(key) ? plannedIndexByBlueprintAction.get(key) : -1;
+            const keys = buildBlueprintActionKeys(job[3], job[2]);
+            let plannedJob = -1;
+            for (let i = 0; i < keys.length; i++) {
+              if (plannedIndexByBlueprintAction.has(keys[i])) {
+                plannedJob = plannedIndexByBlueprintAction.get(keys[i]);
+                break;
+              }
+            }
+            if (plannedJob < 0) {
+              const productActionKey = buildProductActionKey(job[5], job[2]);
+              if (productActionKey && plannedIndexByProductAction.has(productActionKey)) {
+                plannedJob = plannedIndexByProductAction.get(productActionKey);
+              }
+            }
             if (plannedJob >= 0) {
               // found!
               if (job[2] == "Copying") {
@@ -1153,7 +1269,7 @@ const Blueprints = (()=>{
       // prepare data for jobs delivered after hangars were updated
       // all jobs, even those completed
       var alljobs = _time(_sheetName + ' corp jobs (all)', () => Corporation.getJobsCached(hangars, true));
-      // filter all jobs delivered after the corporate items cache update
+        // Delivered jobs must stop counting as running, but still need to project into stock until assets catch up.
       let deliveredJobs = alljobs.data.filter(job => job.status == 'delivered' && job.completedTime > items.lastModified);
       trace('deliveredJobs');
       trace(deliveredJobs);
@@ -1577,7 +1693,7 @@ const Blueprints = (()=>{
       // store jobs to sheet jobs table
       if (corpItems) {
         // store items in hangar to sheet hangar table
-        var rows = jobsFiltered.map(a => [(a.duration >0) ? Universe.durationToString(a.duration) : "Done", a.runs, a.activityName, a.blueprintName, a.licensedRuns, '', '', a.installerName, a.startDate, a.endDate]);
+        var rows = jobsFiltered.map(a => [(a.duration >0) ? Universe.durationToString(a.duration) : "Done", a.runs, a.activityName, a.blueprintName, a.licensedRuns, a.productName, '', a.installerName, a.startDate, a.endDate]);
         range = sheet.getRange(firstDataRow, colJobsList, rows.length, 10);
         _time(_sheetName + ' write jobs list (corp)', () => range.setValues(rows));
       }
@@ -1585,8 +1701,8 @@ const Blueprints = (()=>{
       // store personal jobs
       if (jobsPersonal && jobsPersonal.data && jobsPersonal.data.length > 0) {
         // store items in hangar to sheet hangar table
-        var rows = jobsPersonal.data.map(a => [(a.duration >0) ? Universe.durationToString(a.duration) : "Done", a.runs, a.activity_name, a.blueprint_name]);
-        range = sheet.getRange(firstDataRow + corpItems, colJobsList, rows.length, 4);
+        var rows = jobsPersonal.data.map(a => [(a.duration >0) ? Universe.durationToString(a.duration) : "Done", a.runs, a.activity_name, a.blueprint_name, '', a.product_name]);
+        range = sheet.getRange(firstDataRow + corpItems, colJobsList, rows.length, 6);
         _time(_sheetName + ' write jobs list (personal)', () => range.setValues(rows));
       }
 
