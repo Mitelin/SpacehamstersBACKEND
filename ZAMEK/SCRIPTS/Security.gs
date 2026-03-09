@@ -7,6 +7,8 @@ const Security = (()=>{
   const eveSsoUrl = 'https://login.eveonline.com/v2/oauth/authorize?response_type=code'
   const eveTokenApi = 'https://login.eveonline.com/v2/oauth/token'
   const eveUserApi = 'https://login.eveonline.com/v2/oauth/verify'
+  const esiApi = 'https://esi.evetech.net/latest'
+  const fallbackCorporationId = 98652228
   var getScriptUrl_ = function() {
     // OAuth redirect for Apps Script StateToken callbacks.
     // Use current project Script ID so copies of the project keep working.
@@ -75,6 +77,146 @@ const Security = (()=>{
     } catch (e) {
       return null;
     }
+  }
+
+  var escapeHtml_ = function(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  var getGrantedScopes_ = function(verifyInfo, accessToken) {
+    if (verifyInfo && verifyInfo.Scopes) return normalizeScopes(verifyInfo.Scopes);
+    try {
+      let body = accessToken.split('.')[1];
+      let decoded = Utilities.newBlob(Utilities.base64Decode(body)).getDataAsString();
+      let json = JSON.parse(decoded);
+      if (Array.isArray(json.scp)) return normalizeScopes(json.scp.join(' '));
+      if (json.scp) return normalizeScopes(json.scp);
+      if (json.scope) return normalizeScopes(json.scope);
+    } catch (e) {}
+    return '';
+  }
+
+  var getMissingScopes_ = function(grantedScopes, requiredScopes) {
+    var granted = normalizeScopes(grantedScopes).split(' ').filter(Boolean);
+    var required = normalizeScopes(requiredScopes).split(' ').filter(Boolean);
+    var grantedSet = new Set(granted);
+    return required.filter(scope => !grantedSet.has(scope));
+  }
+
+  var authorizedGetWithToken_ = function(url, accessToken) {
+    return UrlFetchApp.fetch(url, {
+      method: 'get',
+      headers: {
+        Authorization: 'Bearer ' + accessToken
+      },
+      muteHttpExceptions: true
+    });
+  }
+
+  var verifyAccessToken_ = function(accessToken) {
+    var response = authorizedGetWithToken_(eveUserApi, accessToken);
+    var code = response.getResponseCode();
+    var body = response.getContentText();
+    if (code !== 200) {
+      throw('Nepodařilo se ověřit EVE token. HTTP ' + code + ': ' + body);
+    }
+    return JSON.parse(body);
+  }
+
+  var getCandidateCorporationId_ = function(characterId) {
+    if (!characterId) return null;
+    var response = UrlFetchApp.fetch(
+      esiApi + '/characters/' + encodeURIComponent(characterId) + '/?datasource=tranquility',
+      { method: 'get', muteHttpExceptions: true }
+    );
+    if (response.getResponseCode() !== 200) return null;
+    try {
+      var data = JSON.parse(response.getContentText());
+      return data && data.corporation_id ? String(data.corporation_id) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  var getCorporateId_ = function() {
+    try {
+      if (typeof Corporation !== 'undefined' && Corporation.getId) return String(Corporation.getId());
+    } catch (e) {}
+    return String(fallbackCorporationId);
+  }
+
+  var validateCorporateAccess_ = function(accessToken) {
+    var verifyInfo = verifyAccessToken_(accessToken);
+    var characterId = String(verifyInfo.CharacterID || '');
+    var characterName = String(verifyInfo.CharacterName || '');
+    var grantedScopes = getGrantedScopes_(verifyInfo, accessToken);
+    var missingScopes = getMissingScopes_(grantedScopes, scopesCorp);
+    var corpId = getCorporateId_();
+    var characterCorpId = getCandidateCorporationId_(characterId);
+
+    if (characterCorpId && characterCorpId !== corpId) {
+      throw(
+        'NEJSI POVERENA OSOBA. ' +
+        (characterName ? ('Character ' + characterName + ' ') : '') +
+        'není členem správné korporace pro corporate tooling. Původní corporate token zůstal beze změny.'
+      );
+    }
+
+    if (missingScopes.length > 0) {
+      throw(
+        'NEJSI POVERENA OSOBA. Přihlášení nemá potřebné scope pro corporate tooling: ' +
+        missingScopes.join(', ') +
+        '. Původní corporate token zůstal beze změny.'
+      );
+    }
+
+    var checks = [
+      {
+        label: 'industry jobs',
+        url: esiApi + '/corporations/' + corpId + '/industry/jobs/?datasource=tranquility&include_completed=false&page=1'
+      },
+      {
+        label: 'corporate assets',
+        url: esiApi + '/corporations/' + corpId + '/assets/?datasource=tranquility&page=1'
+      },
+      {
+        label: 'corporate blueprints',
+        url: esiApi + '/corporations/' + corpId + '/blueprints/?datasource=tranquility&page=1'
+      }
+    ];
+
+    for (var i = 0; i < checks.length; i++) {
+      var check = checks[i];
+      var response = authorizedGetWithToken_(check.url, accessToken);
+      var code = response.getResponseCode();
+      if (code === 200) continue;
+
+      var details = response.getContentText();
+      if (code === 401 || code === 403 || code === 404) {
+        throw(
+          'NEJSI POVERENA OSOBA. ' +
+          (characterName ? ('Character ' + characterName + ' ') : '') +
+          'nemá potřebná corp oprávnění pro ' + check.label + '. ' +
+          'Původní corporate token zůstal beze změny. ' +
+          'HTTP ' + code + ': ' + details
+        );
+      }
+
+      throw(
+        'Corporate token validation failed for ' + check.label + '. ' +
+        'Původní corporate token zůstal beze změny. ' +
+        'HTTP ' + code + ': ' + details
+      );
+    }
+
+    return {
+      characterId: characterId,
+      characterName: characterName,
+      scopes: grantedScopes
+    };
   }
 
   var storeCharacterTokens = function(userProperties, cid, data, profile) {
@@ -186,6 +328,15 @@ const Security = (()=>{
         throw ('EVE SSO corp login failed: ' + err + (desc ? (' - ' + desc) : ''));
       }
 
+      try {
+        validateCorporateAccess_(data.access_token);
+      } catch (validationError) {
+        return HtmlService.createHtmlOutput(
+          '<b>' + escapeHtml_(validationError) + '</b><br><br>' +
+          'Corporate token nebyl uložen. Můžeš zavřít tohle okno.'
+        );
+      }
+
       var scriptProperties = PropertiesService.getScriptProperties();
       storeCorpTokens(scriptProperties, data);
       return HtmlService.createHtmlOutput('<b>Success (Corporate). You can close this window.</b>')
@@ -213,6 +364,10 @@ const Security = (()=>{
 
     getScopes: function(profile) {
       return normalizeScopes(scopeForProfile(profile));
+    },
+
+    validateCorporateAccess: function(accessToken) {
+      return validateCorporateAccess_(accessToken);
     },
 
     /*
@@ -388,6 +543,28 @@ function eveCallbackCorp(e) {
   return Security.eveCallbackCorp(e);
 }
 
+function buildTemporaryTokenProperties_(accessToken, refreshToken, expiresIn, issued) {
+  var store = {};
+  if (accessToken) store.access_token = accessToken;
+  if (refreshToken) store.refresh_token = refreshToken;
+  if (expiresIn) store.expires_in = expiresIn;
+  if (issued) store.issued = issued;
+
+  return {
+    getProperty: function(key) {
+      return Object.prototype.hasOwnProperty.call(store, key) ? store[key] : null;
+    },
+    setProperty: function(key, value) {
+      store[key] = value;
+      return this;
+    },
+    deleteProperty: function(key) {
+      delete store[key];
+      return true;
+    }
+  };
+}
+
 /*
 * Copies current user access and refresh token to corporate access token
 */
@@ -410,10 +587,17 @@ function copyPersonalTokenToCorporate() {
 
   if (!r) throw ('No personal FULL refresh token found. Do EVE Data → Login (Full) first. (Sales login tokens are stored separately and are not used for corporate tooling.)');
 
-  scriptProperties.setProperty("refresh_token", r);
-  if (a) scriptProperties.setProperty("access_token", a);
-  if (e) scriptProperties.setProperty("expires_in", e);
-  if (i) scriptProperties.setProperty("issued", i);
+  var tempProps = buildTemporaryTokenProperties_(a, r, e, i);
+  var validatedAccessToken = Security.getAccessToken(tempProps);
+  var info = Security.validateCorporateAccess(validatedAccessToken);
+
+  scriptProperties.setProperty("refresh_token", tempProps.getProperty('refresh_token'));
+  scriptProperties.setProperty("access_token", tempProps.getProperty('access_token'));
+  scriptProperties.setProperty("expires_in", tempProps.getProperty('expires_in'));
+  scriptProperties.setProperty("issued", tempProps.getProperty('issued'));
+
+  if (info && info.characterId) scriptProperties.setProperty('corp_character_id', String(info.characterId));
+  if (info && info.characterName) scriptProperties.setProperty('corp_character_name', String(info.characterName));
 }
 
 /*
@@ -441,10 +625,14 @@ function copyPersonalTokenToSharedFull() {
 
   if (!r) throw ('No personal FULL refresh token found. Do EVE Data → Login (Full) first.');
 
-  scriptProperties.setProperty("shared_full_refresh_token", r);
-  if (a) scriptProperties.setProperty("shared_full_access_token", a);
-  if (e) scriptProperties.setProperty("shared_full_expires_in", e);
-  if (i) scriptProperties.setProperty("shared_full_issued", i);
+  var tempProps = buildTemporaryTokenProperties_(a, r, e, i);
+  var validatedAccessToken = Security.getAccessToken(tempProps);
+  Security.validateCorporateAccess(validatedAccessToken);
+
+  scriptProperties.setProperty("shared_full_refresh_token", tempProps.getProperty('refresh_token'));
+  scriptProperties.setProperty("shared_full_access_token", tempProps.getProperty('access_token'));
+  scriptProperties.setProperty("shared_full_expires_in", tempProps.getProperty('expires_in'));
+  scriptProperties.setProperty("shared_full_issued", tempProps.getProperty('issued'));
 }
 
 

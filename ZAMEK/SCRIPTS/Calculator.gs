@@ -31,6 +31,8 @@ const Calculator = (() => {
   // T2 final product (invented BPC) requested defaults.
   const FINAL_T2_ME = 0;
   const FINAL_T2_TE = 0;
+  const FINAL_FACTION_SHIP_ME = 0;
+  const FINAL_FACTION_SHIP_TE = 0;
 
   // Internal material pricing mode.
   // Cookbook `priceMode=sell` is closer to an orderbook-wide sell price than to a cheap "top5%" slice.
@@ -237,11 +239,51 @@ const Calculator = (() => {
     return s.replace(/\s+Blueprint\s*$/i, '').trim();
   };
 
-  const inferFinalIsShipFromInput = (rawInput) => {
-    // Best-effort heuristic: resolve the PRODUCT type (not the blueprint) and check its category.
-    // If we fail, default to module-like behavior.
+  const inferFinalVariantFromInput = (rawInput) => {
+    // Best-effort heuristic: resolve the PRODUCT type (not the blueprint) and classify it.
+    // If we fail, default to module-like behavior and no special ME/TE override.
     const raw = normalizeName(rawInput);
-    if (!raw) return false;
+    if (!raw) return { isShip: false, forceShipT1ZeroMeTe: false };
+
+    const isFactionLikeShipName = (typeName, groupName) => {
+      const rawName = String(typeName || '').trim();
+      const n = rawName.toLowerCase();
+      const g = String(groupName || '').toLowerCase();
+
+      // Explicit common faction/pirate hull names where the name itself does not
+      // necessarily contain words like "faction"/"pirate"/"navy".
+      const pirateHullNames = new Set([
+        'worm', 'gila', 'rattlesnake',
+        'dramiel', 'cynabal', 'machariel',
+        'succubus', 'phantasm', 'nightmare',
+        'daredevil', 'vigilant', 'vindicator',
+        'cruor', 'ashimmu', 'bhaalgorn',
+        'garmur', 'orthrus', 'barghest',
+        'astero', 'stratios', 'nestor',
+      ]);
+      if (pirateHullNames.has(n)) return true;
+
+      // Explicit navy/fleet variants.
+      if (/\b(navy issue|fleet issue)\b/i.test(rawName)) return true;
+
+      // Common faction/pirate signals used in existing script logic.
+      const patterns = [
+        /\b(caldari navy|federation navy|imperial navy|republic fleet|khanid navy|ammatar navy)\b/i,
+        /\b(sisters of eve|mordu'?s legion|thukker)\b/i,
+        /\b(dread guristas|true sansha|shadow serpentis|domination|dark blood)\b/i,
+      ];
+      for (let i = 0; i < patterns.length; i++) {
+        if (patterns[i].test(rawName)) return true;
+      }
+
+      // Group-level safety net for SDE group naming.
+      if (/(faction|navy|pirate)/i.test(g)) return true;
+
+      // Direct keyword fallback.
+      if (/\b(faction|pirate)\b/i.test(n)) return true;
+
+      return false;
+    };
 
     const base = [];
     base.push(stripBlueprintSuffix(raw));
@@ -257,19 +299,28 @@ const Calculator = (() => {
         if (t && t.type_id) {
           const full = Universe.getType(Number(t.type_id));
           const cat = String((full && full.category_name) || '').toLowerCase();
-          return cat === 'ship';
+          const isShip = cat === 'ship';
+          if (!isShip) continue;
+
+          const forceShipT1ZeroMeTe = isFactionLikeShipName(
+            (full && full.type_name) || candidate,
+            (full && full.group) || ''
+          );
+          return { isShip: true, forceShipT1ZeroMeTe };
         }
       } catch (e) {
         // try next
       }
     }
 
-    return false;
+    return { isShip: false, forceShipT1ZeroMeTe: false };
   };
 
-  const fetchBlueprintCalculation = (blueprintTypeId, finalIsShip) => {
+  const fetchBlueprintCalculation = (blueprintTypeId, finalVariant) => {
     // Minimal request compatible with Blueprints.calculateBlueprints() endpoint.
     const facility = getDefaultFacilityConfig();
+    const finalIsShip = !!(finalVariant && finalVariant.isShip);
+    const forceShipT1ZeroMeTe = !!(finalVariant && finalVariant.forceShipT1ZeroMeTe);
 
     // Apply T2 final-product 0/0 to the correct bucket (ship vs module).
     // Keep everything else at "max" (10/20).
@@ -278,6 +329,11 @@ const Calculator = (() => {
     const t2ModuleME = finalIsShip ? DEFAULT_ME_T2 : FINAL_T2_ME;
     const t2ModuleTE = finalIsShip ? DEFAULT_TE_T2 : FINAL_T2_TE;
 
+    // Faction/pirate/navy ships are typically built from low/zero-research BPCs.
+    // Force final-ship T1 bucket to 0/0 when detected.
+    const shipT1ME = forceShipT1ZeroMeTe ? FINAL_FACTION_SHIP_ME : DEFAULT_ME_T1;
+    const shipT1TE = forceShipT1ZeroMeTe ? FINAL_FACTION_SHIP_TE : DEFAULT_TE_T1;
+
     const req = {
       types: [{ typeId: blueprintTypeId, amount: 1 }],
 
@@ -285,8 +341,8 @@ const Calculator = (() => {
       // This reduces rounding-driven overbuild for complex T2 trees.
       mergeModules: INTERNAL_MERGE_MODULES,
 
-      shipT1ME: DEFAULT_ME_T1,
-      shipT1TE: DEFAULT_TE_T1,
+      shipT1ME,
+      shipT1TE,
       shipT2ME: t2ShipME,
       shipT2TE: t2ShipTE,
       moduleT1ME: DEFAULT_ME_T1,
@@ -442,11 +498,13 @@ const Calculator = (() => {
     return '';
   };
 
-  const computeInternalBuildCostPerUnit = (blueprintTypeId, systemCostIndexByActivity, debug, finalIsShip) => {
-    const data = fetchBlueprintCalculation(blueprintTypeId, !!finalIsShip);
+  const computeInternalBuildCostPerUnit = (blueprintTypeId, systemCostIndexByActivity, debug, finalVariant) => {
+    const data = fetchBlueprintCalculation(blueprintTypeId, finalVariant || { isShip: false, forceShipT1ZeroMeTe: false });
     const facility = getDefaultFacilityConfig();
     const facilityTaxRate = (Number(facility.facilityTax) || 0) / 100.0;
     const multipliers = resolveMaterialMultipliers(facility);
+    const finalIsShip = !!(finalVariant && finalVariant.isShip);
+    const forceShipT1ZeroMeTe = !!(finalVariant && finalVariant.forceShipT1ZeroMeTe);
 
     // Some backend datasets may include intermediate items in `data.materials` with `isInput=true`.
     // For parity with Cookbook (and to avoid double-counting), treat any type produced by a job in the
@@ -472,6 +530,7 @@ const Calculator = (() => {
       hasInventionJob,
       preferredMaterialPriceMode,
       finalIsShip: !!finalIsShip,
+      forceShipT1ZeroMeTe,
       system: {
         name: getDefaultSystemName(),
         costIndexManufacturing: systemCostIndexByActivity ? systemCostIndexByActivity.get('manufacturing') : null,
@@ -803,7 +862,7 @@ const Calculator = (() => {
       // Resolve blueprintTypeIds; keep mapping to row indexes
       const blueprintIds = [];
       const rowByBlueprintId = new Map();
-      const finalIsShipByBlueprintId = new Map();
+      const finalVariantByBlueprintId = new Map();
 
       for (let i = 0; i < names.length; i++) {
         const name = names[i];
@@ -822,7 +881,7 @@ const Calculator = (() => {
           if (!rowByBlueprintId.has(key)) {
             rowByBlueprintId.set(key, []);
             blueprintIds.push(blueprintTypeId);
-            finalIsShipByBlueprintId.set(key, inferFinalIsShipFromInput(name));
+            finalVariantByBlueprintId.set(key, inferFinalVariantFromInput(name));
           }
           rowByBlueprintId.get(key).push(i);
         } catch (e) {
@@ -867,7 +926,7 @@ const Calculator = (() => {
                 id,
                 systemCostIndexByActivity,
                 debug,
-                finalIsShipByBlueprintId.get(key)
+                finalVariantByBlueprintId.get(key)
               );
               cost = res.perUnit;
               costCache.set(key, cost);
@@ -902,7 +961,11 @@ const Calculator = (() => {
             const id = blueprintIds[i];
             const key = String(id);
             const hint = hintCache.get(key);
-            const baseMe = (hint && hint.hasInventionJob) ? FINAL_T2_ME : DEFAULT_ME_T1;
+            const v = finalVariantByBlueprintId.get(key);
+            const forceShipT1ZeroMeTe = !!(v && v.forceShipT1ZeroMeTe);
+            const baseMe = forceShipT1ZeroMeTe
+              ? FINAL_FACTION_SHIP_ME
+              : ((hint && hint.hasInventionJob) ? FINAL_T2_ME : DEFAULT_ME_T1);
             const k = String(baseMe);
             if (!groupIds.has(k)) groupIds.set(k, []);
             groupIds.get(k).push(id);

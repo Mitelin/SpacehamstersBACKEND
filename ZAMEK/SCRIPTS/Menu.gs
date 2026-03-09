@@ -31,6 +31,7 @@ function onOpen() {
     .addSubMenu(ui.createMenu('Debug')
       .addItem('Copy token → Corporate', 'copyPersonalTokenToCorporate')
       .addItem('Copy token → Shared (Full)', 'copyPersonalTokenToSharedFull')
+      .addItem('Map Sheets (export MD)', 'sheetMapGenerateAndShow')
       .addItem('Timing: ON', 'perfTimingEnable')
       .addItem('Timing: OFF', 'perfTimingDisable'))
     .addToUi();
