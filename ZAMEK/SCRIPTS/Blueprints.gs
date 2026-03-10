@@ -556,14 +556,6 @@ const Blueprints = (()=>{
         range = sheet.getRange(firstDataRow, colJobs, maxJobs, 1);
         range.setValue("");
 
-        // clear required products column
-        range = sheet.getRange(firstDataRow, colJobs + 1, maxJobs, 1);
-        range.setValue(0);
-
-        // clear required input materials
-        range = sheet.getRange(firstDataRow, colInput + 9, maxJobs, 6);
-        range.setValue(0);
-
         // clear job run costs and note
         range = sheet.getRange(firstDataRow, colRunCost, maxJobs, 2);
         range.setValue("");
@@ -851,6 +843,38 @@ const Blueprints = (()=>{
 
       });
 
+      const statusValues = Array.from({ length: plannedCount }, () => ['']);
+      const requiredValues = Array.from({ length: plannedCount }, () => [0]);
+      const runCostValues = Array.from({ length: plannedCount }, () => [0]);
+      const runCostNoteValues = Array.from({ length: plannedCount }, () => ['']);
+
+      for (let row = 0; row < plannedCount; row++) {
+        requiredValues[row][0] = plannedJobs[row][12];
+      }
+
+      _time(_sheetName + ' recalc write requirements', () => {
+        range = sheet.getRange(firstDataRow, colJobs + 1, maxJobs, 1);
+        range.setValue(0);
+        range = sheet.getRange(firstDataRow, colInput + 9, maxJobs, 6);
+        range.setValue(0);
+
+        if (plannedCount > 0) {
+          sheet.getRange(firstDataRow, colJobs, plannedCount, 1).setValues(inProgressValues);
+          sheet.getRange(firstDataRow, colJobs + 1, plannedCount, 1).setValues(requiredValues);
+        }
+
+        if (inputCount > 0) {
+          const inputRequiredValues = inputMaterials.slice(0, inputCount).map(r => [r[9], r[10], r[11], r[12], r[13], r[14]]);
+          sheet.getRange(firstDataRow, colInput + 9, inputCount, 6).setValues(inputRequiredValues);
+        }
+
+        SpreadsheetApp.flush();
+      });
+
+      const readyValues = plannedCount > 0
+        ? sheet.getRange(firstDataRow, colJobs + 2, plannedCount, 1).getValues()
+        : [];
+
       // update the planned job status and run cost
       i = 0;
       let bpos;
@@ -863,11 +887,6 @@ const Blueprints = (()=>{
       });
       trace(allRunningJobs);
 
-      const statusValues = Array.from({ length: plannedCount }, () => ['']);
-      const requiredValues = Array.from({ length: plannedCount }, () => [0]);
-      const runCostValues = Array.from({ length: plannedCount }, () => [0]);
-      const runCostNoteValues = Array.from({ length: plannedCount }, () => ['']);
-
       _time(_sheetName + ' recalc compute status & cost', () => {
       for (let row = 0; row < plannedCount; row++) {
         let product = plannedJobs[row][0];
@@ -878,7 +897,7 @@ const Blueprints = (()=>{
         let isAdvanced = plannedJobs[row][9];
         let inprogress = plannedJobs[row][11];
         let required = plannedJobs[row][12];
-        let ready = plannedJobs[row][13];
+        let ready = readyValues[row] ? Number(readyValues[row][0]) || 0 : 0;
 
         // update job status
         if (ready >= required) {
@@ -971,8 +990,6 @@ const Blueprints = (()=>{
           }
         }
 
-        requiredValues[row][0] = required;
-
         // Update job run cost
         let runcost = 0;
 
@@ -1020,15 +1037,8 @@ const Blueprints = (()=>{
       _time(_sheetName + ' recalc write outputs', () => {
         if (plannedCount > 0) {
           sheet.getRange(firstDataRow, 11, plannedCount, 1).setValues(statusValues);
-          sheet.getRange(firstDataRow, 13, plannedCount, 1).setValues(requiredValues);
           sheet.getRange(firstDataRow, colRunCost, plannedCount, 1).setValues(runCostValues);
           sheet.getRange(firstDataRow, colRunCost + 1, plannedCount, 1).setValues(runCostNoteValues);
-        }
-
-        // update the input material requied amount in one batch
-        if (inputCount > 0) {
-          const inputRequiredValues = inputMaterials.slice(0, inputCount).map(r => [r[9], r[10], r[11], r[12], r[13], r[14]]);
-          sheet.getRange(firstDataRow, colInput + 9, inputCount, 6).setValues(inputRequiredValues);
         }
       });
 

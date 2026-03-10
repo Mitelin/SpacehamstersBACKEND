@@ -41,3 +41,8 @@ def test_running_jobs_recalc_keeps_product_fallback_contract() -> None:
         r"buildBlueprintActionKeys\(job\[3\],\s*job\[2\]\)",
         text,
     ), "Running-jobs recalc must still try blueprint+activity matching first."
+
+    assert re.search(
+        r"SpreadsheetApp\.flush\(\);[\s\S]*?sheet\.getRange\(firstDataRow,\s*colJobs \+ 2,\s*plannedCount,\s*1\)\.getValues\(\)",
+        text,
+    ), "Status recalc must refresh formulas and then re-read ready counts from the sheet in the same run."
