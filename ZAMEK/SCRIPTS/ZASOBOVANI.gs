@@ -39,10 +39,11 @@ const Zasobovani = (() => {
   const INPUT_COL_NAME = 0;
   const INPUT_COL_TOTAL_NEEDED = 9;
 
-  // Project parameter cell containing the manufacturing hangar label (used only to infer division).
-  // In Blueprints.updateProject(): range(2,2,11,1), so data[0][0] is B2.
-  const PROJECT_MANUF_HANGAR_ROW = 2;
-  const PROJECT_MANUF_HANGAR_COL = 2; // B
+  // Project parameter cells containing corporate hangar labels used by project refresh.
+  // In Blueprints.updateProject(): range(2,2,11,1), so these rows map to:
+  // B2 manufacturing, B3 reaction, B5 research, B12 capital.
+  const PROJECT_HANGAR_PARAM_ROWS = [2, 3, 5, 12];
+  const PROJECT_HANGAR_PARAM_COL = 2; // B
 
   // Fallback division label if no project has B2 filled.
   const DEFAULT_PROD_DIVISION = 'Industry skladka';
@@ -95,9 +96,11 @@ const Zasobovani = (() => {
       const lockVal = sh.getRange(LOCK_ROW, LOCK_COL, 1, 1).getValue();
       if (lockVal) continue;
 
-      const manufHangar = sh.getRange(PROJECT_MANUF_HANGAR_ROW, PROJECT_MANUF_HANGAR_COL, 1, 1).getValue();
-      const baseDiv = baseDivisionFromHangarLabel_(manufHangar);
-      if (baseDiv) prodDivisions.add(baseDiv);
+      PROJECT_HANGAR_PARAM_ROWS.forEach(row => {
+        const hangarLabel = sh.getRange(row, PROJECT_HANGAR_PARAM_COL, 1, 1).getValue();
+        const baseDiv = baseDivisionFromHangarLabel_(hangarLabel);
+        if (baseDiv) prodDivisions.add(baseDiv);
+      });
 
       const inputCount = countContiguousRows_(sh, FIRST_DATA_ROW, COL_INPUT, 1000);
       if (inputCount <= 0) continue;

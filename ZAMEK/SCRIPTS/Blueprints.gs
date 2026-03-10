@@ -556,6 +556,14 @@ const Blueprints = (()=>{
         range = sheet.getRange(firstDataRow, colJobs, maxJobs, 1);
         range.setValue("");
 
+        // required values must be reset before reading tables,
+        // otherwise the next recalculation compounds the previous run.
+        range = sheet.getRange(firstDataRow, colJobs + 1, maxJobs, 1);
+        range.setValue(0);
+
+        range = sheet.getRange(firstDataRow, colInput + 9, maxJobs, 6);
+        range.setValue(0);
+
         // clear job run costs and note
         range = sheet.getRange(firstDataRow, colRunCost, maxJobs, 2);
         range.setValue("");
@@ -869,8 +877,11 @@ const Blueprints = (()=>{
         SpreadsheetApp.flush();
       });
 
-      const readyValues = plannedCount > 0
-        ? sheet.getRange(firstDataRow, colJobs + 2, plannedCount, 1).getValues()
+      const refreshedPlannedJobs = plannedCount > 0
+        ? sheet.getRange(firstDataRow, 1, plannedCount, 22).getValues()
+        : [];
+      const refreshedInputMaterials = inputCount > 0
+        ? sheet.getRange(firstDataRow, colInput, inputCount, 21).getValues()
         : [];
 
       // update the planned job status and run cost
@@ -887,15 +898,16 @@ const Blueprints = (()=>{
 
       _time(_sheetName + ' recalc compute status & cost', () => {
       for (let row = 0; row < plannedCount; row++) {
-        let product = plannedJobs[row][0];
-        let blueprint = plannedJobs[row][1];
-        let action = plannedJobs[row][3];
-        let runs = plannedJobs[row][4];
+        const refreshedJob = refreshedPlannedJobs[row] || plannedJobs[row];
+        let product = refreshedJob[0];
+        let blueprint = refreshedJob[1];
+        let action = refreshedJob[3];
+        let runs = refreshedJob[4];
         let materials = materialsByRow[row];
-        let isAdvanced = plannedJobs[row][9];
-        let inprogress = plannedJobs[row][11];
-        let required = plannedJobs[row][12];
-        let ready = readyValues[row] ? Number(readyValues[row][0]) || 0 : 0;
+        let isAdvanced = refreshedJob[9];
+        let inprogress = Number(refreshedJob[11]) || 0;
+        let required = Number(refreshedJob[12]) || 0;
+        let ready = Number(refreshedJob[13]) || 0;
 
         // update job status
         if (ready >= required) {
@@ -939,11 +951,11 @@ const Blueprints = (()=>{
               let materialVolume = 0;
 
               // find amount in input materials
-              let materialRecord = (inputIndexByName.has(material.type) ? inputMaterials[inputIndexByName.get(material.type)] : null);
+              let materialRecord = (inputIndexByName.has(material.type) ? refreshedInputMaterials[inputIndexByName.get(material.type)] : null);
               if (materialRecord) materialVolume += materialRecord[15 + sourceHangar];
 
               // find amount in job output
-              let jobRecord = (plannedIndexByProduct.has(material.type) ? plannedJobs[plannedIndexByProduct.get(material.type)] : null);
+              let jobRecord = (plannedIndexByProduct.has(material.type) ? refreshedPlannedJobs[plannedIndexByProduct.get(material.type)] : null);
               if (jobRecord) {
                 materialVolume += jobRecord[14 + sourceHangar];
                 if (sourceHangarAlt) materialVolume += jobRecord[14 + sourceHangarAlt];

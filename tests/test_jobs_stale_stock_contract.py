@@ -41,6 +41,14 @@ def test_recently_delivered_jobs_are_projected_into_stock_not_running() -> None:
     ), "Recently delivered jobs must be converted into projected stock via getFinishedJobProducts()."
 
     assert re.search(
+        r"getFinishedJobProducts\s*\(\s*plannedJobs\s*,\s*deliveredJobs[\s\S]*?SpreadsheetApp\.flush\(\);[\s\S]*?this\.recalculateProject\(sheet,\s*notify\)",
+        blueprints_text,
+    ), (
+        "Delivered-job fallback must be written into project tables before recalculateProject() runs, "
+        "so the same refresh sees output that is not yet present in the assets cache."
+    )
+
+    assert re.search(
         r"if\s*\(!all\)\s*\{[\s\S]*?item\s*=>\s*item\.status\s*==\s*'active'",
         corporation_text,
     ), "Default getJobsCached() contract must stay limited to active jobs so delivered work is not double-counted as running."

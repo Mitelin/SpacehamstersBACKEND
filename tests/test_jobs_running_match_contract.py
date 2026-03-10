@@ -43,6 +43,16 @@ def test_running_jobs_recalc_keeps_product_fallback_contract() -> None:
     ), "Running-jobs recalc must still try blueprint+activity matching first."
 
     assert re.search(
-        r"SpreadsheetApp\.flush\(\);[\s\S]*?sheet\.getRange\(firstDataRow,\s*colJobs \+ 2,\s*plannedCount,\s*1\)\.getValues\(\)",
+        r"SpreadsheetApp\.flush\(\);[\s\S]*?sheet\.getRange\(firstDataRow,\s*1,\s*plannedCount,\s*22\)\.getValues\(\)",
         text,
-    ), "Status recalc must refresh formulas and then re-read ready counts from the sheet in the same run."
+    ), "Status recalc must refresh formulas and then re-read planned job rows from the sheet in the same run."
+
+    assert re.search(
+        r"SpreadsheetApp\.flush\(\);[\s\S]*?sheet\.getRange\(firstDataRow,\s*1,\s*plannedCount,\s*22\)\.getValues\(\)[\s\S]*?sheet\.getRange\(firstDataRow,\s*colInput,\s*inputCount,\s*21\)\.getValues\(\)",
+        text,
+    ), "Status recalc must re-read planned-job and input-material tables after flush so availability checks use fresh formula outputs."
+
+    assert re.search(
+        r"recalc clear columns[\s\S]*?getRange\(firstDataRow,\s*colJobs \+ 1,\s*maxJobs,\s*1\)[\s\S]*?setValue\(0\)[\s\S]*?getRange\(firstDataRow,\s*colInput \+ 9,\s*maxJobs,\s*6\)[\s\S]*?setValue\(0\)",
+        text,
+    ), "Requirement columns must be reset before recalc reads tables, or the next refresh compounds stale required values."
