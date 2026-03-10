@@ -713,11 +713,9 @@ const Blueprints = (()=>{
         })
       });
 
-      // write in-progress counts (column "Ve výrobě") in one batch
-      if (plannedCount > 0) {
-        const inProgressValues = plannedJobs.slice(0, plannedCount).map(r => [Number(r[11]) || 0]);
-        sheet.getRange(firstDataRow, colJobs, plannedCount, 1).setValues(inProgressValues);
-      }
+      const inProgressValues = plannedCount > 0
+        ? plannedJobs.slice(0, plannedCount).map(r => [Number(r[11]) || 0])
+        : [];
 
       /*
        * Calculate how much material is needed for each job
