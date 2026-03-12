@@ -39,7 +39,7 @@ function downloadOreMinerals (typeName) {
     'contentType': 'application/json',
     'payload' : JSON.stringify(req)
   };
-  var response = UrlFetchApp.fetch("http://www.spacehamsters.eu:8010/api/ore/material", options);
+  var response = UrlFetchApp.fetch(aubiApi + '/ore/material', options);
 
   // parsuj odpoved do pole struktur
   var json = response.getContentText();

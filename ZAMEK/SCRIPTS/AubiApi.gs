@@ -2,7 +2,7 @@
  * Aubi Rest Api client
  */ 
 const Aubi = (()=>{
-  const aubiApi = 'http://www.spacehamsters.eu:8010/api'
+  const aubiApi = 'https://www.spacehamsters.eu/api'
   const options_get = {
     'method' : 'get',
     "headers" : {    

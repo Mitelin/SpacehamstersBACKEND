@@ -368,7 +368,7 @@ const Calculator = (() => {
       muteHttpExceptions: true,
     };
 
-    const response = UrlFetchApp.fetch('http://www.spacehamsters.eu:8010/api/blueprints/calculate', options);
+    const response = UrlFetchApp.fetch(aubiApi + '/blueprints/calculate', options);
     const code = response.getResponseCode();
     if (code !== 200) {
       throw ('Blueprint calculate error: ' + code + ' ' + response.getContentText());

@@ -447,7 +447,7 @@ const Blueprints = (()=>{
         'contentType': 'application/json',
         'payload' : JSON.stringify(req)
       };
-      var response = UrlFetchApp.fetch("http://www.spacehamsters.eu:8010/api/blueprints/calculate", options);
+      var response = UrlFetchApp.fetch(aubiApi + '/blueprints/calculate', options);
 
       // parsuj odpoved do pole struktur
       var json = response.getContentText();
@@ -2048,7 +2048,7 @@ const Blueprints = (()=>{
         'contentType': 'application/json',
         'payload' : JSON.stringify(req)
       };
-      var response = UrlFetchApp.fetch("http://www.spacehamsters.eu:8010/api/blueprints/calculate", options);
+      var response = UrlFetchApp.fetch(aubiApi + '/blueprints/calculate', options);
 
       // parsuj odpoved do pole struktur
       var json = response.getContentText();
