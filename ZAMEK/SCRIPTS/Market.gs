@@ -12,7 +12,7 @@ const Market = (()=>{
   const toNumber_ = (value) => {
     if (typeof value === 'number') return value;
     if (value == null || value === '') return NaN;
-    return Number(String(value).replace(/[\s\u00A0]/g, ''));
+    return Number(String(value).replace(/[\s\u00A0]/g, '').replace(',', '.'));
   };
   const roundUpToHighestPlace_ = (value) => {
     const n = Math.ceil(toNumber_(value));
@@ -94,23 +94,27 @@ const Market = (()=>{
     const config = getT2MarketBuildCostConfig_();
     for (let start = 0; start < blueprintIds.length; start += BUILD_COST_BATCH) {
       const batchIds = blueprintIds.slice(start, start + BUILD_COST_BATCH);
-      const data = Eve.getBuildCosts(
-        batchIds,
-        config.quantity,
-        config.priceMode,
-        config.additionalCosts,
-        config.baseMe,
-        config.componentsMe,
-        config.system,
-        config.facilityTax,
-        config.industryStructureType,
-        config.industryRig,
-        config.reactionStructureType,
-        config.reactionRig,
-        config.reactionFlag,
-        config.blueprintVersion
-      );
-
+      let data;
+      try {
+        data = Eve.getBuildCosts(
+          batchIds,
+          config.quantity,
+          config.priceMode,
+          config.additionalCosts,
+          config.baseMe,
+          config.componentsMe,
+          config.system,
+          config.facilityTax,
+          config.industryStructureType,
+          config.industryRig,
+          config.reactionStructureType,
+          config.reactionRig,
+          config.reactionFlag,
+          config.blueprintVersion
+        );
+      } catch (e) {
+        continue;
+      }
       if (!Array.isArray(data)) continue;
 
       data.forEach(entry => {
@@ -271,7 +275,6 @@ const Market = (()=>{
         roundUpToHighestPlace_(type[1]),
         type[2]
       ]);
-
       let buildCostValues = targetTypes.map(() => ['']);
       try {
         const buildCostByName = getT2MarketBuildCostsByName_(targetTypes.map(type => type[0]));
@@ -286,8 +289,8 @@ const Market = (()=>{
       }
 
       // store target types
-      t2marketSheet.getRange(3, typesCol, targetTypes.length, 3).setValues(targetTypes);
-      if (buildCostValues.length) {
+      if (targetTypes.length) {
+        t2marketSheet.getRange(3, typesCol, targetTypes.length, 3).setValues(targetTypes);
         t2marketSheet.getRange(3, buildCostCol, buildCostValues.length, 1).setValues(buildCostValues);
       }
     },

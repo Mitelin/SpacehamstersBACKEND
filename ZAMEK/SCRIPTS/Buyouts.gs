@@ -1,7 +1,9 @@
 /*
  * All functions to calculate buyout prices
  */ 
-const BuyOuts = (()=>{
+function getBuyOuts_() {
+  if (globalThis.__zamekBuyOuts) return globalThis.__zamekBuyOuts;
+
   const getCachedTypeIdPrice_ = (typeId) => {
     priceList.init(true);
     const row = Array.isArray(priceList.l_data)
@@ -35,7 +37,7 @@ const BuyOuts = (()=>{
     return getCachedTypeIdPrice_(typeId);
   };
 
-  return {
+  globalThis.__zamekBuyOuts = {
 
     /*
     * Fixes item names that start with an apostrophe - special char ignired by sheet when coopy/pasting
@@ -107,8 +109,8 @@ const BuyOuts = (()=>{
       // If the refresh failed, this keeps the last known prices usable.
       priceList.init(true);
 
-      // clear sheet
-      buyoutSheet.getRange(2, 15, 20, 9).setValue('');
+      // clear previous output
+      buyoutSheet.getRange(2, 15, Math.max(1, buyoutSheet.getMaxRows() - 1), 9).clearContent();
 
       // fetch personal contracts
       let c = Eve.getPersonalContracts()
@@ -129,7 +131,7 @@ const BuyOuts = (()=>{
         a.date_issued,
         a.date_expired,
         Universe.getLocationName(a.start_location_id),
-        a.price,
+        Number(a.price) || 0,
         0,
         '',
         a.title
@@ -147,7 +149,10 @@ const BuyOuts = (()=>{
         // calculate contract price
         let buyout = 0;
         let category = ''
-        i.data.forEach(item => {
+        let includedItems = i.data.filter(item => item.is_included !== false);
+        let itemsToValue = includedItems.length > 0 ? includedItems : i.data;
+
+        itemsToValue.forEach(item => {
           // get the item price
           let price = getBuyoutPriceSafe_(item.type_id, allowNetworkFetch);
           if (!price) return;
@@ -188,23 +193,29 @@ const BuyOuts = (()=>{
         r[7] = category;
       })
 
+      rows = rows.filter(r => Number(r[6]) >= 0);
+
       console.log(rows);
+
+      if (rows.length == 0) return;
 
       buyoutSheet.getRange(2, 15, rows.length, 9).setValues(rows);
 
     }
-  }
-})()
+  };
+
+  return globalThis.__zamekBuyOuts;
+}
 
 /* Menu and Button friendly buyouts functions */
 function fixBuyoutNames() {
-  BuyOuts.fixNames();
+  getBuyOuts_().fixNames();
 }
 
 function copyBuyoutPrice() {
-  BuyOuts.copyPrice();
+  getBuyOuts_().copyPrice();
 }
 
 function calculatePersonalContracts() {
-  BuyOuts.calculatePersonalContracts();
+  getBuyOuts_().calculatePersonalContracts();
 }

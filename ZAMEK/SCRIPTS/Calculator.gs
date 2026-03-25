@@ -837,6 +837,75 @@ const Calculator = (() => {
   };
 
   return {
+    getBuildCostPerUnitByName: function (typeNames) {
+      const out = new Map();
+      const uniqueNames = [];
+      const blueprintIds = [];
+      const namesByBlueprintId = new Map();
+      const seenNames = new Set();
+      const seenBlueprintIds = new Set();
+
+      (typeNames || []).forEach(name => {
+        const itemName = normalizeName(name);
+        if (!itemName || seenNames.has(itemName)) return;
+        seenNames.add(itemName);
+        uniqueNames.push(itemName);
+      });
+
+      uniqueNames.forEach(name => {
+        let blueprintTypeId = null;
+        try {
+          blueprintTypeId = Blueprints.getBlueprintId(name);
+        } catch (e) {
+          blueprintTypeId = null;
+        }
+        if (!blueprintTypeId) return;
+
+        const key = String(blueprintTypeId);
+        if (!namesByBlueprintId.has(key)) namesByBlueprintId.set(key, []);
+        namesByBlueprintId.get(key).push(name);
+
+        if (seenBlueprintIds.has(key)) return;
+        seenBlueprintIds.add(key);
+        blueprintIds.push(blueprintTypeId);
+      });
+
+      if (!blueprintIds.length) return out;
+
+      const systemName = getDefaultSystemName();
+      const BATCH = 20;
+      for (let start = 0; start < blueprintIds.length; start += BATCH) {
+        const batchIds = blueprintIds.slice(start, start + BATCH);
+        let data;
+        try {
+          data = fetchBuildCosts(batchIds, systemName, 'sell', DEFAULT_ME_T1, DEFAULT_ME_T1);
+        } catch (e) {
+          continue;
+        }
+        if (!Array.isArray(data)) continue;
+
+        data.forEach(entry => {
+          if (!entry) return;
+          const status = (typeof entry.status === 'string') ? Number(entry.status) : entry.status;
+          const message = entry.message;
+          if (status !== 200 || !message) return;
+
+          const blueprintTypeId =
+            message.blueprintTypeId ??
+            message.blueprintTypeID ??
+            message.blueprint_type_id ??
+            message.blueprintTypeid;
+          const buildCostPerUnit = Number(message.buildCostPerUnit);
+          if (blueprintTypeId == null || !isFinite(buildCostPerUnit) || buildCostPerUnit <= 0) return;
+
+          const names = namesByBlueprintId.get(String(blueprintTypeId)) || [];
+          names.forEach(name => out.set(name, buildCostPerUnit));
+        });
+      }
+
+      return out;
+    },
+
     calculate: function (sheet, options) {
       const debug = !!(options && options.debug);
       sheet = getTargetSheet(sheet);
