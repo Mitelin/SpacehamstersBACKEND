@@ -2,6 +2,39 @@
  * All functions to calculate buyout prices
  */ 
 const BuyOuts = (()=>{
+  const getCachedTypeIdPrice_ = (typeId) => {
+    priceList.init(true);
+    const row = Array.isArray(priceList.l_data)
+      ? priceList.l_data.find(element => element[1] == typeId)
+      : null;
+    if (!row) return null;
+
+    return {
+      name: row[2],
+      group: row[3],
+      category: row[4],
+      buyout: row[7],
+      eveAverage: row[pricecolEVE - 1],
+      eveAdjusted: row[pricecolEVE],
+      jitaSplitTop5: row[pricecolEVE + 1],
+      jitaBuyAvg: row[pricecolEVE + 3],
+      jitaBuyWavg: row[pricecolEVE + 4],
+      jitaBuyTop5: row[pricecolEVE + 6],
+      jitaSellAvg: row[pricecolEVE + 10],
+      jitaSellWavg: row[pricecolEVE + 11],
+      jitaSellTop5: row[pricecolEVE + 14]
+    };
+  };
+
+  const getBuyoutPriceSafe_ = (typeId, allowNetworkFetch) => {
+    try {
+      if (allowNetworkFetch) return priceList.getTypeIdPrice(typeId);
+    } catch (e) {
+      // fall through to cached-only lookup
+    }
+    return getCachedTypeIdPrice_(typeId);
+  };
+
   return {
 
     /*
@@ -56,6 +89,24 @@ const BuyOuts = (()=>{
      * Fetches all personal buyout contracts from EVE Api and calculates its buyout type and price
      */
     calculatePersonalContracts: function() {
+      let allowNetworkFetch = true;
+      try {
+        refreshPricelistTycoon_({ silent: true });
+      } catch (e) {
+        allowNetworkFetch = false;
+        try {
+          SpreadsheetApp.getActive().toast(
+            'Vykupy: refresh ceníku selhal, načítám kontrakty z posledních uložených cen.',
+            'Vykupy',
+            10
+          );
+        } catch (ee) {}
+      }
+
+      // Always reload the current pricelist sheet state before evaluating contracts.
+      // If the refresh failed, this keeps the last known prices usable.
+      priceList.init(true);
+
       // clear sheet
       buyoutSheet.getRange(2, 15, 20, 9).setValue('');
 
@@ -98,7 +149,8 @@ const BuyOuts = (()=>{
         let category = ''
         i.data.forEach(item => {
           // get the item price
-          let price = priceList.getTypeIdPrice(item.type_id);
+          let price = getBuyoutPriceSafe_(item.type_id, allowNetworkFetch);
+          if (!price) return;
           buyout += price.buyout * item.quantity;
           
           // evaluate contract category

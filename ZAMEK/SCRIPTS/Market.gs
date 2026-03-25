@@ -1,6 +1,139 @@
 const Market = (()=>{
   const doctrinesCol = 12;     // first column with target doctrine names and amounts in the T2 Market sheet 
   const typesCol = 1;        // first column with target types and amounts in the T2 Market sheet 
+  const buildCostCol = 11;    // K
+  const BUILD_COST_BATCH = 20;
+  const normalizeDoctrineName_ = (name) => {
+    return String(name == null ? '' : name)
+      .replace(/\u00A0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+  const toNumber_ = (value) => {
+    if (typeof value === 'number') return value;
+    if (value == null || value === '') return NaN;
+    return Number(String(value).replace(/[\s\u00A0]/g, ''));
+  };
+  const roundUpToHighestPlace_ = (value) => {
+    const n = Math.ceil(toNumber_(value));
+    if (!isFinite(n) || n <= 0) return 0;
+    if (n < 10) return n;
+
+    const digits = String(n);
+    const magnitude = Math.pow(10, digits.length - 1);
+    const leading = Math.floor(n / magnitude);
+    const remainder = n % magnitude;
+    if (remainder === 0) return n;
+    return (leading + 1) * magnitude;
+  };
+  const getT2MarketBuildCostConfig_ = () => {
+    const config = {
+      quantity: 1,
+      priceMode: 'sell',
+      additionalCosts: 0,
+      baseMe: 10,
+      componentsMe: 10,
+      system: 'Q-02UL',
+      facilityTax: 0,
+      industryStructureType: 'Sotiyo',
+      industryRig: 'T2',
+      reactionStructureType: 'Tatara',
+      reactionRig: 'T2',
+      reactionFlag: 'Yes',
+      blueprintVersion: 'tq'
+    };
+
+    try {
+      if (buildCostSheet) {
+        const params = buildCostSheet.getRange(1, 2, 1, 3).getValues();
+        const system = normalizeDoctrineName_(params[0][0]);
+        const quantity = Math.trunc(toNumber_(params[0][2]));
+        if (system) config.system = system;
+        if (isFinite(quantity) && quantity > 0) config.quantity = quantity;
+      }
+    } catch (e) {
+      // keep defaults when the build-cost sheet is unavailable
+    }
+
+    return config;
+  };
+  const getT2MarketBuildCostsByName_ = (typeNames) => {
+    const out = new Map();
+    const uniqueNames = [];
+    const seenNames = new Set();
+    const blueprintIds = [];
+    const namesByBlueprintId = new Map();
+    const seenBlueprintIds = new Set();
+
+    typeNames.forEach(name => {
+      const itemName = normalizeDoctrineName_(name);
+      if (!itemName || seenNames.has(itemName)) return;
+      seenNames.add(itemName);
+      uniqueNames.push(itemName);
+    });
+
+    uniqueNames.forEach(name => {
+      let blueprintTypeId = null;
+      try {
+        blueprintTypeId = Blueprints.getBlueprintId(name);
+      } catch (e) {
+        blueprintTypeId = null;
+      }
+      if (!blueprintTypeId) return;
+
+      const key = String(blueprintTypeId);
+      if (!namesByBlueprintId.has(key)) namesByBlueprintId.set(key, []);
+      namesByBlueprintId.get(key).push(name);
+      if (seenBlueprintIds.has(key)) return;
+      seenBlueprintIds.add(key);
+      blueprintIds.push(blueprintTypeId);
+    });
+
+    if (!blueprintIds.length) return out;
+
+    const config = getT2MarketBuildCostConfig_();
+    for (let start = 0; start < blueprintIds.length; start += BUILD_COST_BATCH) {
+      const batchIds = blueprintIds.slice(start, start + BUILD_COST_BATCH);
+      const data = Eve.getBuildCosts(
+        batchIds,
+        config.quantity,
+        config.priceMode,
+        config.additionalCosts,
+        config.baseMe,
+        config.componentsMe,
+        config.system,
+        config.facilityTax,
+        config.industryStructureType,
+        config.industryRig,
+        config.reactionStructureType,
+        config.reactionRig,
+        config.reactionFlag,
+        config.blueprintVersion
+      );
+
+      if (!Array.isArray(data)) continue;
+
+      data.forEach(entry => {
+        if (!entry) return;
+        const status = (typeof entry.status === 'string') ? Number(entry.status) : entry.status;
+        const message = entry.message;
+        if (status !== 200 || !message) return;
+
+        const blueprintTypeId =
+          message.blueprintTypeId ??
+          message.blueprintTypeID ??
+          message.blueprint_type_id ??
+          message.blueprintTypeid;
+        const buildCostPerUnit = toNumber_(message.buildCostPerUnit);
+        if (blueprintTypeId == null || !isFinite(buildCostPerUnit) || buildCostPerUnit <= 0) return;
+
+        const names = namesByBlueprintId.get(String(blueprintTypeId)) || [];
+        names.forEach(name => out.set(name, buildCostPerUnit));
+      });
+    }
+
+    return out;
+  };
 
   return {
 
@@ -46,21 +179,26 @@ const Market = (()=>{
     */
     calculateT2Market: function() {
       var targetTypes = [];   // array of target types
+      var missingDoctrines = [];
+      var invalidAmounts = [];
 
       // clear target types table
-      t2marketSheet.getRange(3, typesCol, 200, 2).setValue(["",""]);
+      const rowsToClear = Math.max(200, t2marketSheet.getMaxRows() - 2);
+      t2marketSheet.getRange(3, typesCol, rowsToClear, 3).clearContent();
+      t2marketSheet.getRange(3, buildCostCol, rowsToClear, 1).clearContent();
 
       // Load target doctrines from the market sheet
       var doctrines = t2marketSheet.getRange(3, doctrinesCol, 99, 2).getValues();
       
 //      console.log (doctrines);
-      var doctrineNames = t2marketSheet.getRange(3, doctrinesCol, 99, 1).getValues().flat();
+      var doctrineNames = t2marketSheet.getRange(3, doctrinesCol, 99, 1).getValues().flat().map(normalizeDoctrineName_);
 //      console.log (doctrineNames);
 
       // check for duplicities
       let hasDuplicity = false;
 //      console.log(t2marketSheet.getRange(3, doctrinesCol, 1, 1).getBackground())
       t2marketSheet.getRange(3, doctrinesCol, 99, 1).setBackground('#efefef');  
+      t2marketSheet.getRange(3, doctrinesCol + 1, 99, 1).setBackground('#efefef');
 
       for (i = 0; i < 98; i++) {
         if (doctrineNames[i] != '') {
@@ -82,11 +220,27 @@ const Market = (()=>{
       }
 
       // go through Doctrines
-      doctrines.forEach(doctrine => {
-        if (doctrine[0] != '') {
-          console.log(doctrine[0])
-          var types = Doctrines.getDoctrine(doctrine[0]);
+      doctrines.forEach((doctrine, index) => {
+        var doctrineName = normalizeDoctrineName_(doctrine[0]);
+        var doctrineAmount = Number(doctrine[1]);
+        var sheetRow = 3 + index;
+
+        if (doctrineName != '') {
+          console.log(doctrineName)
+          var types = Doctrines.getDoctrine(doctrineName, { silent: true });
           console.log(types);
+
+          if (!Array.isArray(types)) {
+            missingDoctrines.push(sheetRow + ': ' + doctrineName);
+            t2marketSheet.getRange(sheetRow, doctrinesCol, 1, 1).setBackground('#ff0000');
+            return;
+          }
+
+          if (!isFinite(doctrineAmount) || doctrineAmount <= 0) {
+            invalidAmounts.push(sheetRow + ': ' + doctrineName + ' (' + doctrine[1] + ')');
+            t2marketSheet.getRange(sheetRow, doctrinesCol + 1, 1, 1).setBackground('#ff0000');
+            return;
+          }
 
           // merge types to target types
           types.forEach(type => {
@@ -94,9 +248,9 @@ const Market = (()=>{
             var targetTypeIndex = targetTypes.findIndex(element => element[0] == type.type);
             if (targetTypeIndex >= 0) {
 //              console.log (targetTypeIndex);
-              targetTypes[targetTypeIndex][1] += type.amount * doctrine[1];
+              targetTypes[targetTypeIndex][1] += type.amount * doctrineAmount;
             } else {
-              targetTypes.push([type.type, type.amount * doctrine[1], type.isBuy])
+              targetTypes.push([type.type, type.amount * doctrineAmount, type.isBuy])
             }
 
           });
@@ -105,8 +259,37 @@ const Market = (()=>{
         }
       });
 
+      if (missingDoctrines.length || invalidAmounts.length) {
+        var problems = [];
+        if (missingDoctrines.length) problems.push('Chybi doktryny: ' + missingDoctrines.join(' | '));
+        if (invalidAmounts.length) problems.push('Neplatne pocty: ' + invalidAmounts.join(' | '));
+        throw (problems.join('\n'));
+      }
+
+      targetTypes = targetTypes.map(type => [
+        type[0],
+        roundUpToHighestPlace_(type[1]),
+        type[2]
+      ]);
+
+      let buildCostValues = targetTypes.map(() => ['']);
+      try {
+        const buildCostByName = getT2MarketBuildCostsByName_(targetTypes.map(type => type[0]));
+        buildCostValues = targetTypes.map(type => {
+          const cost = buildCostByName.get(type[0]);
+          return [isFinite(cost) ? cost : ''];
+        });
+      } catch (e) {
+        try {
+          SpreadsheetApp.getActive().toast('T2 Market build cost error: ' + e, 'Market', 8);
+        } catch (ee) {}
+      }
+
       // store target types
       t2marketSheet.getRange(3, typesCol, targetTypes.length, 3).setValues(targetTypes);
+      if (buildCostValues.length) {
+        t2marketSheet.getRange(3, buildCostCol, buildCostValues.length, 1).setValues(buildCostValues);
+      }
     },
 
     /*
