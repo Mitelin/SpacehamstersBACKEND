@@ -373,7 +373,7 @@ const Calculator = (() => {
     if (code !== 200) {
       throw ('Blueprint calculate error: ' + code + ' ' + response.getContentText());
     }
-    return JSON.parse(response.getContentText());
+    return parseJsonResponse_(response, 'Blueprint calculate blueprintTypeId=' + blueprintTypeId);
   };
 
   const priceSell = (typeName) => {

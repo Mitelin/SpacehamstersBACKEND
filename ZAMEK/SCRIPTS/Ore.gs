@@ -37,13 +37,13 @@ function downloadOreMinerals (typeName) {
   var options = {
     'method' : 'post',
     'contentType': 'application/json',
-    'payload' : JSON.stringify(req)
+    'payload' : JSON.stringify(req),
+    'muteHttpExceptions': true
   };
   var response = UrlFetchApp.fetch(aubiApi + '/ore/material', options);
 
   // parsuj odpoved do pole struktur
-  var json = response.getContentText();
-  var data = JSON.parse(json);
+  var data = parseJsonResponse_(response, 'Ore material type=' + typeName);
 
   return data;
 }

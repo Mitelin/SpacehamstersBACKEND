@@ -33,6 +33,7 @@ const Sales = (()=>{
   const COL_UNIT = 4;    // D (computed)
   const COL_TOTAL = 5;   // E (computed)
   const COL_NOTE = 6;    // F (computed)
+  const COL_MANUAL = 7;  // G (user input fallback unit price)
 
   // Skill IDs for market order slots
   const SKILL_TRADE = 3443;
@@ -789,6 +790,13 @@ const Sales = (()=>{
     return quantizeToMarketTick_(p2, 'down');
   };
 
+  const appendPriceNoteTag_ = (note, tag) => {
+    const base = String(note || '').trim();
+    const extra = String(tag || '').trim();
+    if (!extra) return base;
+    return base ? (base + '+' + extra) : extra;
+  };
+
   // Extract relevant price columns from priceList.l_data row.
   // Indices match the object assembled in Ceník.gs (priceList.getTypeIdPrice).
   const unitSellFromPricelistRow = (row) => {
@@ -813,12 +821,12 @@ const Sales = (()=>{
     // Layout:
     // Row 1: configuration (character name in B1) + meta
     // Row 2: export text
-    // A4:F4: table header
-    // Rows 5..: user input in B/C, computed output in A/D/E/F
+    // A4:G4: table header
+    // Rows 5..: user input in B/C/G, computed output in A/D/E/F
     const maxClearRows = Math.max(1, sheet.getMaxRows());
     const clearRows = Math.min(Math.max(1, maxClearRows - 4), 2000);
 
-    // Clear computed columns but keep user input in B/C.
+    // Clear computed columns but keep user input in B/C/G.
     sheet.getRange(INPUT_START_ROW, COL_TYPE_ID, clearRows, 1).clearContent();
     sheet.getRange(INPUT_START_ROW, COL_UNIT, clearRows, 3).clearContent();
 
@@ -837,13 +845,14 @@ const Sales = (()=>{
       sheet.getRange(2, 1).setWrap(true);
     } catch (e) {}
 
-    sheet.getRange(4, 1, 1, 6).setValues([[
+    sheet.getRange(4, 1, 1, 7).setValues([[
       'type_id',
       'name (input)',
       'qty (input)',
       'unit_sell',
       'total_sell',
-      'note'
+      'note',
+      'manual_unit'
     ]]);
 
     sheet.activate();
@@ -869,12 +878,12 @@ const Sales = (()=>{
     if (!lastRow || lastRow < INPUT_START_ROW) return 'SOLD: list je prázdný.';
 
     const numRows = lastRow - INPUT_START_ROW + 1;
-    const src = sheet.getRange(INPUT_START_ROW, COL_NAME, numRows, 2).getValues(); // B:C
+    const src = sheet.getRange(INPUT_START_ROW, COL_NAME, numRows, 6).getValues(); // B:G
     const items = [];
     for (let i = 0; i < src.length; i++) {
       const nm = normalizeEveName(src[i][0]);
       if (!nm) continue;
-      items.push([src[i][0], src[i][1]]);
+      items.push([src[i][0], src[i][1], src[i][5]]);
     }
     if (!items.length) return 'SOLD: žádné položky v B/C.';
 
@@ -886,12 +895,12 @@ const Sales = (()=>{
 
     // Clear all computed/output cells and current input block.
     sheet.getRange(INPUT_START_ROW, COL_TYPE_ID, clearRows, 1).clearContent(); // A
-    sheet.getRange(INPUT_START_ROW, COL_NAME, clearRows, 2).clearContent();    // B:C
-    sheet.getRange(INPUT_START_ROW, COL_UNIT, clearRows, 3).clearContent();    // D:F
+    sheet.getRange(INPUT_START_ROW, COL_NAME, clearRows, 6).clearContent();    // B:G
     sheet.getRange(2, 1).clearContent(); // export payload
 
     if (remain.length) {
-      sheet.getRange(INPUT_START_ROW, COL_NAME, remain.length, 2).setValues(remain);
+      const remainRows = remain.map(row => [row[0], row[1], '', '', '', row[2] || '']);
+      sheet.getRange(INPUT_START_ROW, COL_NAME, remainRows.length, 6).setValues(remainRows);
     }
 
     SpreadsheetApp.getActive().toast(
@@ -948,6 +957,14 @@ const Sales = (()=>{
           return;
         }
 
+        writeSheet(sheet, {
+          characterId,
+          characterName,
+          maxSlots,
+          openOrders: openOrderCount,
+          freeSlots
+        }, '');
+
         // B) read manual input list from sheet (B/C)
         const lastRow = sheet.getLastRow();
         if (!lastRow || lastRow < INPUT_START_ROW) {
@@ -956,7 +973,7 @@ const Sales = (()=>{
         }
 
         const inputNumRows = lastRow - INPUT_START_ROW + 1;
-        const inputRange = sheet.getRange(INPUT_START_ROW, COL_NAME, inputNumRows, 5); // B..F
+  const inputRange = sheet.getRange(INPUT_START_ROW, COL_NAME, inputNumRows, 6); // B..G
         const inputVals = inputRange.getValues();
 
         const inputRows = []; // {rowOffset, nameRaw, nameNorm, key, qty, qtyOk, manualUnitF}
@@ -972,8 +989,8 @@ const Sales = (()=>{
           const qtyOk = isFinite(qtyNum) && qtyNum > 0;
           const qty = qtyOk ? Math.trunc(qtyNum) : 0;
 
-          const manualFromF = Number(String(inputVals[i][4] || '').trim().replace(/[\s,]/g, ''));
-          const manualUnitF = (isFinite(manualFromF) && manualFromF > 0) ? manualFromF : NaN;
+          const manualFromG = Number(String(inputVals[i][5] || '').trim().replace(/[\s,]/g, ''));
+          const manualUnitF = (isFinite(manualFromG) && manualFromG > 0) ? manualFromG : NaN;
 
           const nameNorm = normalizeEsiTypeName_(nameRaw);
           const key = canonicalTypeKey_(nameRaw);
@@ -1089,11 +1106,12 @@ const Sales = (()=>{
           // Prefer Janice Jita sell unit price by canonical name key (if available).
           const j = janiceByKey.get(r.key) || null;
           let unit = (j && isFinite(j.unitSell) && j.unitSell > 0) ? Number(j.unitSell) : NaN;
-          let note = (isFinite(unit) && unit > 0) ? ((j && j._usedTop5) ? 'janice5' : 'janice') : '';
+          let note = (isFinite(unit) && unit > 0) ? ((j && j._usedTop5) ? 'janice:top5' : 'janice') : '';
 
           if (!(isFinite(unit) && unit > 0)) {
             const plRow = pricelistRowByTypeId.get(typeId);
             unit = unitSellFromPricelistRow(plRow);
+            if (isFinite(unit) && unit > 0) note = 'fallback:pricelist';
           }
 
           // Last-resort price fetch for a small number of items missing from caches.
@@ -1103,7 +1121,7 @@ const Sales = (()=>{
               const u2 = unitSellFromPricelistObj_(p);
               if (isFinite(u2) && u2 > 0) {
                 unit = u2;
-                note = 'fetched';
+                note = 'fallback:pricelist-fetch';
                 fetchedPrice++;
               }
             } catch (e) {
@@ -1116,7 +1134,7 @@ const Sales = (()=>{
             const u3 = getJitaSellFromOrders_(typeId);
             if (isFinite(u3) && u3 > 0) {
               unit = u3;
-              note = 'orders';
+              note = 'fallback:orders';
               fetchedPrice++;
             }
           }
@@ -1127,7 +1145,7 @@ const Sales = (()=>{
             const avg = mp ? Number(mp.average) : NaN;
             const adj = mp ? Number(mp.adjusted) : NaN;
             unit = (isFinite(avg) && avg > 0) ? avg : ((isFinite(adj) && adj > 0) ? adj : NaN);
-            note = isFinite(unit) ? 'fallback' : 'no price';
+            note = isFinite(unit) ? 'fallback:esi' : 'no price';
           }
 
           // Last fallback: static type base price from ESI type detail.
@@ -1136,7 +1154,7 @@ const Sales = (()=>{
             const u4 = getTypeBasePrice_(typeId);
             if (isFinite(u4) && u4 > 0) {
               unit = u4;
-              note = 'base';
+              note = 'fallback:base';
               fetchedPrice++;
             }
           }
@@ -1146,7 +1164,7 @@ const Sales = (()=>{
           if (!(isFinite(unit) && unit > 0)) {
             if (isFinite(r.manualUnitF) && r.manualUnitF > 0) {
               unit = Number(r.manualUnitF);
-              note = 'manualF';
+              note = 'fallback:manual';
             }
           }
 
@@ -1161,7 +1179,7 @@ const Sales = (()=>{
                 (live / unit > LIVE_VERIFY_MAX_RATIO);
               if (off) {
                 unit = live;
-                note = (note ? (note + '>orders') : 'orders');
+                note = appendPriceNoteTag_(note || 'fallback:orders', 'verified-orders');
               }
             }
           }
@@ -1173,13 +1191,11 @@ const Sales = (()=>{
             if (priceMultiplier < 1) {
               const uTick = undercutOneTick_(unit);
               if (isFinite(uTick) && uTick > 0) unit = uTick;
-              if (!note) note = 'tick';
-              else note = note + '*';
+              note = appendPriceNoteTag_(note || 'price', 'tick');
             } else {
               // Keep legacy behavior for markups (>1).
               unit = unit * priceMultiplier;
-              if (!note) note = 'mult';
-              else note = note + '*';
+              note = appendPriceNoteTag_(note || 'price', 'mult');
             }
           }
 
@@ -1208,7 +1224,7 @@ const Sales = (()=>{
               if (unit <= buy) {
                 unit = nextMarketPriceAbove_(buy);
               }
-              note = note ? (note + 'b') : 'buy+';
+              note = appendPriceNoteTag_(note || 'price', 'buyguard');
             }
           }
 
@@ -1266,14 +1282,10 @@ const Sales = (()=>{
         sheet.getRange(INPUT_START_ROW, COL_UNIT, inputNumRows, 1).setValues(outUnit);
         sheet.getRange(INPUT_START_ROW, COL_TOTAL, inputNumRows, 1).setValues(outTotal);
         sheet.getRange(INPUT_START_ROW, COL_NOTE, inputNumRows, 1).setValues(outNote);
-
-        writeSheet(sheet, {
-          characterId,
-          characterName,
-          maxSlots,
-          openOrders: openOrderCount,
-          freeSlots
-        }, exportText);
+        sheet.getRange(2, 1).setValue(exportText || '');
+        try {
+          sheet.getRange(2, 1).setWrap(true);
+        } catch (e) {}
 
         if (!candidateBlocking && exportLines.length) {
           showClipboardDialog(exportText, exportCandidatesLen, freeSlots, inputRows.length);

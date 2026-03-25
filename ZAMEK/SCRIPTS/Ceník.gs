@@ -2,6 +2,64 @@ const pricecolEVE = 16;    // prvni sloupec s cenou EVE
 
 var g_pricelist;
 
+function parseJsonResponse_(response, sourceLabel, options) {
+  options = options || {};
+
+  const code = response && response.getResponseCode ? response.getResponseCode() : '';
+  const rawText = response && response.getContentText ? response.getContentText() : '';
+  const text = rawText ? rawText.replace(/^\uFEFF/, '').trim() : '';
+
+  if (!text) {
+    if (options.silent) {
+      Logger.log('>>> ' + sourceLabel + ': empty response' + (code ? ' (' + code + ')' : ''));
+      return null;
+    }
+    throw new Error(sourceLabel + ': empty response' + (code ? ' (' + code + ')' : ''));
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    const preview = text.slice(0, 160).replace(/\s+/g, ' ');
+    const message = sourceLabel + ': invalid JSON response' + (code ? ' (' + code + ')' : '') + ': ' + preview;
+    if (options.silent) {
+      Logger.log('>>> ' + message);
+      return null;
+    }
+    throw new Error(message);
+  }
+}
+
+/*
+ * Main function, orchestrates price list refreshing
+ */
+function refreshPricelistTycoon_(options) {
+  options = options || {};
+
+  // activate the sheet
+  pricelistSheet.activate()
+
+  // delete current prices
+  var lastRow = pricelistSheet.getLastRow();
+//  pricelistSheet.getRange(2, pricecolEVE, lastRow - 1, 17).setValue("");
+
+  // nacti ID komodit
+  pricelistFetchItemIds();
+
+  // nacti ceny komodit podle ID
+  pricelistFetchEVEPrices();
+
+  // nacti statistiky komodit z EVE Tycoonu
+  pricelistFetchTycoonPrices();
+
+  // prepocitej cenu ore
+  pricelistCalculateOre();
+
+  if (!options.silent) {
+    SpreadsheetApp.getUi().alert('Aktualizace dokončena.', '', SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+
 /*
  * Main function, orchestrates price list refreshing
  */
@@ -51,27 +109,7 @@ function getPricesMarketeer() {
 function getPricesTycoon() {
   Logger.log('>>> getPrices()');
 
-  // activate the sheet
-  pricelistSheet.activate()
-
-  // delete current prices
-  var lastRow = pricelistSheet.getLastRow();
-//  pricelistSheet.getRange(2, pricecolEVE, lastRow - 1, 17).setValue("");
-
-  // nacti ID komodit
-  pricelistFetchItemIds();
-
-  // nacti ceny komodit podle ID
-  pricelistFetchEVEPrices();
-
-  // nacti statistiky komodit z EVE Tycoonu
-  pricelistFetchTycoonPrices();
-
-  // prepocitej cenu ore
-  pricelistCalculateOre();
-
-  // show result in notification window
-  SpreadsheetApp.getUi().alert('Aktualizace dokončena.', '', SpreadsheetApp.getUi().ButtonSet.OK);
+  refreshPricelistTycoon_();
 }
 
 /*
@@ -133,9 +171,8 @@ function pricelistAddNewBuyouts () {
         ]]);
 
         // fetch tycoon price
-        var response = UrlFetchApp.fetch('https://evetycoon.com/api/v1/market/stats/10000002/' + type.type_id);
-        var json = response.getContentText();
-        var data = JSON.parse(json);
+        var response = UrlFetchApp.fetch('https://evetycoon.com/api/v1/market/stats/10000002/' + type.type_id, { muteHttpExceptions: true });
+        var data = parseJsonResponse_(response, 'EVE Tycoon type_id=' + type.type_id);
         let headers = response.getHeaders();
         let expires = headers.Expires;
 
@@ -220,11 +257,10 @@ function pricelistFetchEVEPrices() {
 
   // GET request na EVE universe API pro market prices
   var url = eveApi + '/markets/prices/?datasource=tranquility'
-  var response = UrlFetchApp.fetch(url);
+  var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
 
   // parsuj odpoved do pole struktur
-  var json = response.getContentText();
-  var data = JSON.parse(json);
+  var data = parseJsonResponse_(response, 'EVE market prices');
 //  Logger.log(data);
 
   // update prices for items in sheet
@@ -299,8 +335,8 @@ function pricelistFetchTycoonPrices() {
       for (res = 0; res < responses.length; res++) {
         // parsuj odpoved do pole struktur
         var response = responses[res]
-        var json = response.getContentText();
-        var data = JSON.parse(json);
+        var data = parseJsonResponse_(response, 'EVE Tycoon batch type_id=' + g_pricelist[i + rows[res]][1], { silent: true });
+        if (!data) continue;
         let headers = response.getHeaders();
         let expires = headers.Expires;
 
@@ -436,7 +472,7 @@ function pricelistFetchMarketeerPrices() {
         const resp = UrlFetchApp.fetch('https://api.evemarketer.com/ec/marketstat/json?regionlimit=10000002' + q, { muteHttpExceptions: true });
         const code = resp.getResponseCode();
         if (code !== 200) continue;
-        const data = JSON.parse(resp.getContentText());
+        const data = parseJsonResponse_(resp, 'EVE Marketer chunk', { silent: true });
         if (!Array.isArray(data)) continue;
         data.forEach(function (item) {
           const typeId = (item && item.buy && item.buy.forQuery && item.buy.forQuery.types && item.buy.forQuery.types[0])
@@ -478,7 +514,11 @@ function pricelistFetchMarketeerPrices() {
         const url = 'https://market.fuzzwork.co.uk/aggregates/?region=10000002&types=' + encodeURIComponent(typeIds.join(','));
         const resp2 = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
         if (resp2.getResponseCode() === 200) {
-          const obj = JSON.parse(resp2.getContentText());
+          const obj = parseJsonResponse_(resp2, 'Fuzzwork aggregates', { silent: true });
+          if (!obj) {
+            i += j;
+            continue;
+          }
           typeIds.forEach(tid => {
             const localIdx = localIdxByTypeId.get(tid);
             if (localIdx == null) return;
@@ -578,9 +618,8 @@ var priceList = {
 //        console.log(type);
 
       // fetch tycoon price
-      var response = UrlFetchApp.fetch('https://evetycoon.com/api/v1/market/stats/10000002/' + type.type_id);
-      var json = response.getContentText();
-      var data = JSON.parse(json);
+      var response = UrlFetchApp.fetch('https://evetycoon.com/api/v1/market/stats/10000002/' + type.type_id, { muteHttpExceptions: true });
+      var data = parseJsonResponse_(response, 'EVE Tycoon type_id=' + type.type_id);
       let headers = response.getHeaders();
       let expires = headers.Expires;
 

@@ -93,6 +93,25 @@ const Blueprints = (()=>{
     return productKey + '|' + actionKey;
   };
 
+  const toIntOrDefault = function(value, fallback) {
+    if (value === '' || value == null) return fallback;
+    const parsed = parseInt(value, 10);
+    return isNaN(parsed) ? fallback : parsed;
+  };
+
+  const toRequiredPositiveInt = function(value) {
+    if (typeof value === 'number') {
+      if (!isFinite(value) || value <= 0 || Math.floor(value) !== value) return null;
+      return value;
+    }
+
+    const text = String(value == null ? '' : value).trim();
+    if (!text || !/^\d+$/.test(text)) return null;
+
+    const parsed = parseInt(text, 10);
+    return parsed > 0 ? parsed : null;
+  };
+
   /* 
   * Overi, jestli je povolene z aktivniho sheetu spoustet blueprint funkce
   */
@@ -154,6 +173,16 @@ const Blueprints = (()=>{
       item = item.trim();
       trace(item);
       if (item) {
+        const amount = toRequiredPositiveInt(doctrines[row][col + 1]);
+        if (amount == null) {
+          SpreadsheetApp.getUi().alert(
+            'Chyba!',
+            'Nezadal jsi platný počet kusů pro blueprint ' + item + ' v doktríně ' + name + '.',
+            SpreadsheetApp.getUi().ButtonSet.OK
+          );
+          return null;
+        }
+
         // zsjisti a zapis ID blueptintu
         var blueprintTypeId = getBlueprintId (item);
         if (!blueprintTypeId) {
@@ -161,7 +190,7 @@ const Blueprints = (()=>{
           return null;
         }
 
-        types.push({"typeId": blueprintTypeId, "amount": doctrines[row][col + 1]})
+        types.push({"typeId": blueprintTypeId, "amount": amount})
       }
     }
 
@@ -403,14 +432,25 @@ const Blueprints = (()=>{
       for (let bpr = 0; bpr < 10; bpr++) {
         var item = blueprints[bpr][0]
         if (item) {
+          const amount = toRequiredPositiveInt(blueprints[bpr][1]);
+          if (amount == null) {
+            SpreadsheetApp.getUi().alert(
+              'Chyba!',
+              'Nezadal jsi platný počet kusů pro blueprint ' + item + ' na řádku ' + (bpr + 2) + '.',
+              SpreadsheetApp.getUi().ButtonSet.OK
+            );
+            return;
+          }
+
           // pokud nazev itemu zacina na [, jedna se o nazev doktryny - nacti celou doktrynu
           if (item.startsWith('[')) {
             // nacti polozky z doktryny
             var docItems = getDoctrine(item);
+            if (!docItems) return;
 
             // pridej jednotlive polozky do seznamu
             docItems.forEach(docItem => {
-              types.push({"typeId": docItem.typeId, "amount": docItem.amount * blueprints[bpr][1]})
+              types.push({"typeId": docItem.typeId, "amount": docItem.amount * amount})
             });
 
           } else {
@@ -421,7 +461,7 @@ const Blueprints = (()=>{
               return;
             }
 
-            types.push({"typeId": blueprintTypeId, "amount": blueprints[bpr][1]})
+            types.push({"typeId": blueprintTypeId, "amount": amount})
           }
         }
       }
@@ -429,13 +469,13 @@ const Blueprints = (()=>{
       // priprav JSON objekt requestu
       var req = {}
       req.types = types;
-      req.shipT1ME = params[5][0];
+      req.shipT1ME = toIntOrDefault(params[5][0], 0);
       req.shipT1TE = 10;
-      req.shipT2ME = params[6][0];
+      req.shipT2ME = toIntOrDefault(params[6][0], 0);
       req.shipT2TE = 0;
       req.moduleT1ME = 10;
       req.moduleT1TE = 10;
-      req.moduleT2ME = params[7][0];
+      req.moduleT2ME = toIntOrDefault(params[7][0], 0);
       req.moduleT2TE = 0;
       req.produceFuelBlocks=(params[8][0] == 'Ne')?false:true;
       req.buildT1=(params[9][0] == 'Ne')?false:true;
@@ -445,13 +485,13 @@ const Blueprints = (()=>{
       var options = {
         'method' : 'post',
         'contentType': 'application/json',
-        'payload' : JSON.stringify(req)
+        'payload' : JSON.stringify(req),
+        'muteHttpExceptions': true
       };
       var response = UrlFetchApp.fetch(aubiApi + '/blueprints/calculate', options);
 
       // parsuj odpoved do pole struktur
-      var json = response.getContentText();
-      var data = JSON.parse(json);
+      var data = parseJsonResponse_(response, 'Blueprint calculate types=' + req.types.length);
     //  console.log(data);
 
       // zapis runy jobu podle levelu sestupne
@@ -1244,7 +1284,14 @@ const Blueprints = (()=>{
       sheet.getRange(3, colLog + 1, 1, 1).setValue((items.cacheRefresh / 60).toFixed(2) + " m");
 
       Sidebar.add("Čtu korporátní joby");
-      var jobs = _time(_sheetName + ' corp jobs', () => Corporation.getJobsCached(hangars));
+        var alljobs = _time(_sheetName + ' corp jobs (all)', () => Corporation.getJobsCached(hangars, true));
+        var jobs = {
+          age: alljobs.age,
+          cacheRefresh: alljobs.cacheRefresh,
+          lastModified: alljobs.lastModified,
+          expires: alljobs.expires,
+          data: alljobs.data.filter(job => job.status == 'active')
+        };
       Sidebar.add("- počet " + jobs.data.length + " ks");
       Sidebar.add("- stáří " + (jobs.age / 60).toFixed(2) + " m");
       Sidebar.add("- refresh " + (jobs.cacheRefresh / 60).toFixed(2) + " m");
@@ -1280,16 +1327,20 @@ const Blueprints = (()=>{
           : [];
       });
 
-      // prepare data for material used for jobs started after the hangars were updated
-      let newJobs = jobs.data.filter(job => job.startTime > items.lastModified);
+      // Prepare job delta against the asset snapshot.
+      // Use the all-jobs snapshot, not only currently active jobs, otherwise a job
+      // that starts after assets were read and gets delivered before jobs are read
+      // disappears from the correction logic until the next refresh.
+      let newJobs = alljobs.data.filter(job => (
+        job.startTime > items.lastModified &&
+        (job.status == 'active' || job.status == 'delivered')
+      ));
       let blueprintsAll = _time(_sheetName + ' all blueprints', () => Corporation.getBlueprintsCached());
       var newJobMaterials = _time(_sheetName + ' materials for new jobs', () => getMaterialsForNewJobs(plannedJobs, newJobs, blueprintsAll.data))
       trace(newJobMaterials);
 
       // prepare data for jobs delivered after hangars were updated
-      // all jobs, even those completed
-      var alljobs = _time(_sheetName + ' corp jobs (all)', () => Corporation.getJobsCached(hangars, true));
-        // Delivered jobs must stop counting as running, but still need to project into stock until assets catch up.
+      // Delivered jobs must stop counting as running, but still need to project into stock until assets catch up.
       let deliveredJobs = alljobs.data.filter(job => job.status == 'delivered' && job.completedTime > items.lastModified);
       trace('deliveredJobs');
       trace(deliveredJobs);
@@ -2035,9 +2086,9 @@ const Blueprints = (()=>{
       req.shipT2ME = 0;
       req.shipT2TE = 0;
       req.moduleT1ME = 0;
-      req.moduleT1ME = 0;
+      req.moduleT1TE = 0;
       req.moduleT2ME = 0;
-      req.moduleT2ME = 0;
+      req.moduleT2TE = 0;
       req.produceFuelBlocks = false;
       req.buildT1 = false;
       req.copyBPO = false;
@@ -2046,13 +2097,13 @@ const Blueprints = (()=>{
       var options = {
         'method' : 'post',
         'contentType': 'application/json',
-        'payload' : JSON.stringify(req)
+        'payload' : JSON.stringify(req),
+        'muteHttpExceptions': true
       };
       var response = UrlFetchApp.fetch(aubiApi + '/blueprints/calculate', options);
 
       // parsuj odpoved do pole struktur
-      var json = response.getContentText();
-      var data = JSON.parse(json);
+      var data = parseJsonResponse_(response, 'Blueprint calculate typeId=' + typeId);
       let blueprint = data.jobs.filter(item => item.level == 1);
 
       return blueprint[0];
