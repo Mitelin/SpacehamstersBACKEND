@@ -388,13 +388,49 @@ const Corporation = (()=>{
 
       // clear last results
       var lastRow = jobHistorySheet.getLastRow();
-      var range = jobHistorySheet.getRange(2, 5, lastRow, 8);
-      range.setValue('');
+      var dataRowCount = Math.max(0, lastRow - 1);
+      if (dataRowCount > 0) {
+        var range = jobHistorySheet.getRange(2, 5, dataRowCount, 8);
+        range.setValue('');
+      }
+
+      const writeReportRows = function(rows) {
+        if (rows.length <= 0) return false;
+        range = jobHistorySheet.getRange(2, 5, rows.length, 8);
+        range.setValues(rows);
+        return true;
+      };
+
+      const toHistoryRows = function(report) {
+        return report.map(a => [a.installerName, a.copying, a.invention, a.manufacturing, a.reaction, a.researchME, a.researchTE, a.total]);
+      };
 
       let report = this.getJobsReport(year, month);
-      var rows = report.map(a => [a.installerName, a.copying, a.invention, a.manufacturing, a.reaction, a.researchME, a.researchTE, a.total]);
-      range = jobHistorySheet.getRange(2, 5, rows.length, 8);
-      range.setValues(rows);
+      var rows = toHistoryRows(report);
+      if (writeReportRows(rows)) return;
+
+      const now = new Date();
+      const isCurrentMonth = Number(year) === now.getFullYear() && Number(month) === (now.getMonth() + 1);
+      if (isCurrentMonth) {
+        SpreadsheetApp.getActive().toast('Historie: backend vrátil prázdný report, zkouším synchronizaci Industry Jobs...', 'Historie', 8);
+        try {
+          Aubi.syncIndustryJobs({ silent: true });
+          report = this.getJobsReport(year, month);
+          rows = toHistoryRows(report);
+          if (writeReportRows(rows)) {
+            SpreadsheetApp.getActive().toast('Historie: data byla po synchronizaci načtena.', 'Historie', 5);
+            return;
+          }
+        } catch (e) {
+          SpreadsheetApp.getActive().toast('Historie: automatická synchronizace Industry Jobs selhala: ' + e, 'Historie', 10);
+          return;
+        }
+      }
+
+      const message = isCurrentMonth
+        ? 'Pro aktuální měsíc backend nevrátil žádná data ani po synchronizaci Industry Jobs.'
+        : 'Backend pro zvolený měsíc nevrátil žádná data.';
+      SpreadsheetApp.getActive().toast(message, 'Historie', 8);
     },
 
     /*
@@ -487,7 +523,10 @@ const Corporation = (()=>{
           probability : a.probability,
           startDate: a.start_date,
           endDate: a.end_date,
-          completedDate: a.completed_date
+          completedDate: a.completed_date,
+          startTime: new Date(a.start_date).getTime(),
+          endTime: new Date(a.end_date).getTime(),
+          completedTime: new Date(a.completed_date).getTime()
         }));
 
       return {age: jobs.age, cacheRefresh: jobs.cacheRefresh, lastModified : jobs.lastModified, expires : jobs.expires, data : jobsTranslated};
@@ -1223,6 +1262,10 @@ const Corporation = (()=>{
 
     unfreezeMemo: function() {
       _setFreezeMemo(false);
+    },
+
+    isMemoFrozen: function() {
+      return _freezeMemo;
     },
 
 

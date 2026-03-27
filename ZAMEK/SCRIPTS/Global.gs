@@ -3,6 +3,34 @@ const corporationId = 98652228   // Corporation ID for "Space Hamsters CZ SK" fo
 const eveApi = 'https://esi.evetech.net/latest'
 const aubiApi = 'https://www.spacehamsters.eu/api'
 
+function parseJsonResponse_(response, sourceLabel, options) {
+	options = options || {};
+
+	const code = response && response.getResponseCode ? response.getResponseCode() : '';
+	const rawText = response && response.getContentText ? response.getContentText() : '';
+	const text = rawText ? rawText.replace(/^\uFEFF/, '').trim() : '';
+
+	if (!text) {
+		if (options.silent) {
+			Logger.log('>>> ' + sourceLabel + ': empty response' + (code ? ' (' + code + ')' : ''));
+			return null;
+		}
+		throw new Error(sourceLabel + ': empty response' + (code ? ' (' + code + ')' : ''));
+	}
+
+	try {
+		return JSON.parse(text);
+	} catch (e) {
+		const preview = text.slice(0, 160).replace(/\s+/g, ' ');
+		const message = sourceLabel + ': invalid JSON response' + (code ? ' (' + code + ')' : '') + ': ' + preview;
+		if (options.silent) {
+			Logger.log('>>> ' + message);
+			return null;
+		}
+		throw new Error(message);
+	}
+}
+
 
 // var ui = SpreadsheetApp.getUi();
 

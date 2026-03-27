@@ -31,6 +31,31 @@ const Aubi = (()=>{
     return ret;
   }
 
+  var parseAubiJsonResponse_ = function(response, sourceLabel) {
+    const code = response && response.getResponseCode ? response.getResponseCode() : '';
+    const rawText = response && response.getContentText ? response.getContentText() : '';
+    const text = rawText ? rawText.replace(/^\uFEFF/, '').trim() : '';
+
+    if (!text) {
+      throw new Error(sourceLabel + ': empty response' + (code ? ' (' + code + ')' : ''));
+    }
+
+    if (/^Chyba\s*:/i.test(text)) {
+      throw new Error(sourceLabel + ': ' + text);
+    }
+
+    if (typeof parseJsonResponse_ === 'function') {
+      return parseJsonResponse_(response, sourceLabel);
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      const preview = text.slice(0, 160).replace(/\s+/g, ' ');
+      throw new Error(sourceLabel + ': invalid JSON response' + (code ? ' (' + code + ')' : '') + ': ' + preview);
+    }
+  }
+
   return {
     /*
      * Stores user token to Aubi DB
@@ -50,7 +75,8 @@ const Aubi = (()=>{
      * synchronizes industry jobs in Aubi DB
      * wallet: wallet number 1 - 7
      */
-    syncIndustryJobs: function() {
+    syncIndustryJobs: function(options) {
+      options = options || {};
       var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/jobs/sync', authorized_options_get());
 
       // parse response to object
@@ -58,7 +84,11 @@ const Aubi = (()=>{
       Logger.log(res);
 
       // show result in notification window
-      SpreadsheetApp.getUi().alert('Synchronizace dokončena.', res, SpreadsheetApp.getUi().ButtonSet.OK);
+      if (!options.silent) {
+        SpreadsheetApp.getUi().alert('Synchronizace dokončena.', res, SpreadsheetApp.getUi().ButtonSet.OK);
+      }
+
+      return res;
     },
 
     /*
@@ -112,9 +142,7 @@ const Aubi = (()=>{
     getHangars: function(locationId) {
       var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/assets/locations/' + locationId.toString(), authorized_options_get());
 
-      // parse response to object
-      var res = response.getContentText();
-      var json = JSON.parse(res);
+      var json = parseAubiJsonResponse_(response, 'Aubi.getHangars locationId=' + locationId);
 
       var rows = json.map(a => [a.locationID, a.locationType, a.locationFlag, a.hangar, a.container, a.name]);
 
@@ -138,9 +166,7 @@ const Aubi = (()=>{
       options.payload = JSON.stringify(req)
       var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/assets', options);
 
-      // parse response to object
-      var res = response.getContentText();
-      var json = JSON.parse(res);
+      var json = parseAubiJsonResponse_(response, 'Aubi.getItems locationID=' + locationID);
 
       var rows = json.map(a => [a.typeName, a.quantity]);
 
@@ -155,11 +181,7 @@ const Aubi = (()=>{
     getJobsReport: function(year, month) {
       var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/jobs/report/' + year.toString() + '/' + month.toString(), authorized_options_get());
 
-      // parse response to object
-      var res = response.getContentText();
-      var json = JSON.parse(res);
-
-      return json;
+      return parseAubiJsonResponse_(response, 'Aubi.getJobsReport year=' + year + ' month=' + month);
     },
 
     /*
@@ -181,11 +203,7 @@ const Aubi = (()=>{
       options.payload = JSON.stringify(body)
       var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/wallets/' + wallet.toString() + '/journal/report', options);
 
-      // parse response to object
-      var res = response.getContentText();
-      var json = JSON.parse(res);
-
-      return json;
+      return parseAubiJsonResponse_(response, 'Aubi.getWalletJournal wallet=' + wallet + ' year=' + year + ' month=' + month);
     },
 
     /*
@@ -202,11 +220,7 @@ const Aubi = (()=>{
       options.payload = JSON.stringify(body)
       var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/jobs/velocity', options);
 
-      // parse response to object
-      var res = response.getContentText();
-      var json = JSON.parse(res);
-
-      return json;
+      return parseAubiJsonResponse_(response, 'Aubi.getIndustryVelocity');
     },
 
     /*
@@ -216,21 +230,13 @@ const Aubi = (()=>{
     getJobs: function(locationId) {
       var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/jobs/location/' + locationId.toString(), authorized_options_get());
 
-      // parse response to object
-      var res = response.getContentText();
-      var json = JSON.parse(res);
-
-      return json;
+      return parseAubiJsonResponse_(response, 'Aubi.getJobs locationId=' + locationId);
     },
 
     getTypeVolumes: function() {
       var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/wallets/7/volumes', authorized_options_get());
 
-      // parse response to object
-      var res = response.getContentText();
-      var json = JSON.parse(res);
-
-      return json;
+      return parseAubiJsonResponse_(response, 'Aubi.getTypeVolumes');
     }
 
   }

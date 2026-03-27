@@ -93,6 +93,109 @@ const Blueprints = (()=>{
     return productKey + '|' + actionKey;
   };
 
+  const addQuantityRowsToMap = function(map, rows) {
+    if (!map || !rows || rows.length === 0) return map;
+
+    rows.forEach(row => {
+      const key = normalizeIndustryKeyPart(row[0]);
+      const quantity = Number(row[1]) || 0;
+      if (!key || quantity === 0) return;
+      map.set(key, (map.get(key) || 0) + quantity);
+    });
+
+    return map;
+  };
+
+  const getQuantityFromMap = function(map, name) {
+    if (!map) return 0;
+    const key = normalizeIndustryKeyPart(name);
+    if (!key) return 0;
+    return Number(map.get(key)) || 0;
+  };
+
+  const parseJsonResponseSafe_ = function(response, sourceLabel, options) {
+    if (typeof parseJsonResponse_ === 'function') {
+      return parseJsonResponse_(response, sourceLabel, options);
+    }
+
+    options = options || {};
+
+    const code = response && response.getResponseCode ? response.getResponseCode() : '';
+    const rawText = response && response.getContentText ? response.getContentText() : '';
+    const text = rawText ? rawText.replace(/^\uFEFF/, '').trim() : '';
+
+    if (!text) {
+      if (options.silent) {
+        Logger.log('>>> ' + sourceLabel + ': empty response' + (code ? ' (' + code + ')' : ''));
+        return null;
+      }
+      throw new Error(sourceLabel + ': empty response' + (code ? ' (' + code + ')' : ''));
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      const preview = text.slice(0, 160).replace(/\s+/g, ' ');
+      const message = sourceLabel + ': invalid JSON response' + (code ? ' (' + code + ')' : '') + ': ' + preview;
+      if (options.silent) {
+        Logger.log('>>> ' + message);
+        return null;
+      }
+      throw new Error(message);
+    }
+  };
+
+  const buildProjectHangarContext = function(manufacturingHangar, reactionHangar, researchHangar, capitalHangar, useBufferHangars) {
+    const hangars = [];
+    const manufacturingHangars = [];
+    const researchBufferHangars = [];
+
+    const pushHangar = function(target, hangar) {
+      if (!hangar) return;
+      target.push(hangar);
+      hangars.push(hangar);
+    };
+
+    pushHangar(manufacturingHangars, Corporation.getHangarByName('Manufactoring', manufacturingHangar));
+    pushHangar(manufacturingHangars, Corporation.getHangarByName('Capital', capitalHangar));
+
+    const reactionHangarObj = Corporation.getHangarByName('Reaction', reactionHangar);
+    if (reactionHangarObj) hangars.push(reactionHangarObj);
+
+    const researchHangarObj = Corporation.getHangarByName('Research', researchHangar);
+    if (researchHangarObj) hangars.push(researchHangarObj);
+
+    let manufacturingBufferHangar = null;
+    let reactionBufferHangar = null;
+    if (useBufferHangars) {
+      manufacturingBufferHangar = Corporation.getHangarByName('Manufactoring', 'Produkty - Prebytky');
+      if (manufacturingBufferHangar) hangars.push(manufacturingBufferHangar);
+
+      reactionBufferHangar = Corporation.getHangarByName('Reaction', 'Produkty - Prebytky');
+      if (reactionBufferHangar) hangars.push(reactionBufferHangar);
+
+      const researchBufferNames = ['Invention - Prebytky', 'Invention - Prebytky 2', 'Invention - Prebytky 3'];
+      researchBufferNames.forEach(name => {
+        const hangar = Corporation.getHangarByName('Research', name);
+        if (!hangar) return;
+        researchBufferHangars.push(hangar);
+        hangars.push(hangar);
+      });
+    }
+
+    return {
+      hangars: hangars,
+      bucketHangars: {
+        1: manufacturingBufferHangar ? [manufacturingBufferHangar] : [],
+        2: manufacturingHangars,
+        3: reactionBufferHangar ? [reactionBufferHangar] : [],
+        4: reactionHangarObj ? [reactionHangarObj] : [],
+        5: researchHangarObj ? [researchHangarObj] : [],
+        6: researchBufferHangars,
+      }
+    };
+  };
+
   const toIntOrDefault = function(value, fallback) {
     if (value === '' || value == null) return fallback;
     const parsed = parseInt(value, 10);
@@ -491,7 +594,7 @@ const Blueprints = (()=>{
       var response = UrlFetchApp.fetch(aubiApi + '/blueprints/calculate', options);
 
       // parsuj odpoved do pole struktur
-      var data = parseJsonResponse_(response, 'Blueprint calculate types=' + req.types.length);
+      var data = parseJsonResponseSafe_(response, 'Blueprint calculate types=' + req.types.length);
     //  console.log(data);
 
       // zapis runy jobu podle levelu sestupne
@@ -707,6 +810,13 @@ const Blueprints = (()=>{
         params = range.getValues();
       });
       var useBufferHangars = (params[3][0] == 'Ne')?false:true;
+      const hangarContext = buildProjectHangarContext(
+        params[1][0],
+        params[2][0],
+        params[4][0],
+        params[10][0],
+        useBufferHangars
+      );
 
       // load prices
       _time(_sheetName + ' recalc load prices', () => priceList.init());
@@ -929,10 +1039,29 @@ const Blueprints = (()=>{
       let bpos;
       let allJobs;
       let allRunningJobs;
+      let deliveredReadyByProduct;
+      let deliveredReadyByBucket;
       _time(_sheetName + ' recalc load corp context', () => {
         bpos = Corporation.loadBPOs();                // load BPOs from cache
-        allJobs = Corporation.getJobsCached();        // load all corporation jobs in all hangars
+        const assetSnapshot = Corporation.getAssetsCached(hangarContext.hangars);
+        allJobs = Corporation.getJobsCached(hangarContext.hangars, true);
         allRunningJobs = allJobs.data.filter(item => item.status == 'active');   // filter only running jobs
+
+        const deliveredJobs = allJobs.data.filter(item => (
+          item.status == 'delivered' && item.completedTime > assetSnapshot.lastModified
+        ));
+
+        deliveredReadyByProduct = addQuantityRowsToMap(new Map(), getFinishedJobProducts(plannedJobs, deliveredJobs));
+        deliveredReadyByBucket = new Map();
+        Object.keys(hangarContext.bucketHangars).forEach(bucketKey => {
+          const bucketHangars = hangarContext.bucketHangars[bucketKey] || [];
+          const projectedRows = [];
+          bucketHangars.forEach(hangar => {
+            const rows = getFinishedJobProducts(plannedJobs, deliveredJobs, hangar.locationID);
+            rows.forEach(row => projectedRows.push(row));
+          });
+          deliveredReadyByBucket.set(Number(bucketKey), addQuantityRowsToMap(new Map(), projectedRows));
+        });
       });
       trace(allRunningJobs);
 
@@ -948,11 +1077,15 @@ const Blueprints = (()=>{
         let inprogress = Number(refreshedJob[11]) || 0;
         let required = Number(refreshedJob[12]) || 0;
         let ready = Number(refreshedJob[13]) || 0;
+        const deliveredReadyFallback = getQuantityFromMap(deliveredReadyByProduct, product);
+        const effectiveReady = (ready < required && deliveredReadyFallback > 0)
+          ? Math.min(required, ready + deliveredReadyFallback)
+          : ready;
 
         // update job status
-        if (ready >= required) {
+        if (effectiveReady >= required) {
           statusValues[row][0] = 'Hotovo';
-        } else if (ready + inprogress >= required) {
+        } else if (effectiveReady + inprogress >= required) {
           statusValues[row][0] = 'Běží';
         } else {
           // find if all required inputs are in right hangar
@@ -1002,8 +1135,15 @@ const Blueprints = (()=>{
               }
 
               // material quantity for one run must be less than material available in hangar to start job
-              if ((material.quantity / runs) > materialVolume) {
-                log = log + "\n" + material.type + " " + (material.quantity / runs - materialVolume)
+              let missingVolume = (material.quantity / runs) - materialVolume;
+              if (missingVolume > 0) {
+                let projectedDelivered = getQuantityFromMap(deliveredReadyByBucket.get(sourceHangar), material.type);
+                if (sourceHangarAlt) projectedDelivered += getQuantityFromMap(deliveredReadyByBucket.get(sourceHangarAlt), material.type);
+                if (projectedDelivered > 0) missingVolume -= projectedDelivered;
+              }
+
+              if (missingVolume > 0) {
+                log = log + "\n" + material.type + " " + missingVolume
                 canStart = false;
               }
             })
@@ -1284,6 +1424,9 @@ const Blueprints = (()=>{
       sheet.getRange(3, colLog + 1, 1, 1).setValue((items.cacheRefresh / 60).toFixed(2) + " m");
 
       Sidebar.add("Čtu korporátní joby");
+      if (typeof Corporation !== 'undefined' && Corporation.syncJobs && (!Corporation.isMemoFrozen || !Corporation.isMemoFrozen())) {
+        _time(_sheetName + ' sync jobs cache', () => Corporation.syncJobs());
+      }
         var alljobs = _time(_sheetName + ' corp jobs (all)', () => Corporation.getJobsCached(hangars, true));
         var jobs = {
           age: alljobs.age,
@@ -2103,7 +2246,7 @@ const Blueprints = (()=>{
       var response = UrlFetchApp.fetch(aubiApi + '/blueprints/calculate', options);
 
       // parsuj odpoved do pole struktur
-      var data = parseJsonResponse_(response, 'Blueprint calculate typeId=' + typeId);
+      var data = parseJsonResponseSafe_(response, 'Blueprint calculate typeId=' + typeId);
       let blueprint = data.jobs.filter(item => item.level == 1);
 
       return blueprint[0];
@@ -2308,7 +2451,8 @@ function runUpdateAllProjects() {
       if (typeof Corporation !== 'undefined') {
         const warmed = {};
         if (Corporation.loadAssets) warmed.assets = _time('warm cache: assets', () => Corporation.loadAssets());
-        if (Corporation.loadJobs) warmed.jobs = _time('warm cache: jobs', () => Corporation.loadJobs());
+        if (Corporation.syncJobs) warmed.jobs = _time('warm cache: jobs', () => Corporation.syncJobs());
+        else if (Corporation.loadJobs) warmed.jobs = _time('warm cache: jobs', () => Corporation.loadJobs());
         if (Corporation.loadBlueprints) warmed.blueprints = _time('warm cache: blueprints', () => Corporation.loadBlueprints());
 
         // Publish cache expiry info for the sidebar footer.

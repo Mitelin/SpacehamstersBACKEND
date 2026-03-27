@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
+from datetime import datetime
 from typing import Any
 
 from .. import db
 from ..esi import ESIClient, parse_x_pages
 from ..logger import log
+
+
+def _jsonable_value(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    return value
+
+
+def _jsonable_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{k: _jsonable_value(v) for k, v in row.items()} for row in rows]
 
 
 class JobsService:
@@ -118,9 +132,9 @@ class JobsService:
         )
 
         if rows:
-            return rows
+            return _jsonable_rows(rows)
 
-        return await db.fetch_all(
+        rows = await db.fetch_all(
             """
             SELECT
                 installerID AS installerId,
@@ -135,6 +149,7 @@ class JobsService:
             """,
             [int(year), int(month)],
         )
+        return _jsonable_rows(rows)
 
     async def get_jobs_velocity(self, categories: Any) -> list[dict[str, Any]]:
         return await db.fetch_all(
