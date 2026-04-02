@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from py_backend.esi import ESIClient
@@ -14,7 +16,7 @@ async def test_jobs_velocity_uses_category_placeholders(monkeypatch: pytest.Monk
     async def fake_fetch_all(sql: str, params: list) -> list[dict]:
         assert "where g.categoryID in (%s, %s)" in sql
         assert params == [6, 7]
-        return [{"typeName": "Test Item", "w1": 1}]
+        return [{"typeName": "Test Item", "w1": Decimal("1.5")}] 
 
     monkeypatch.setattr("py_backend.db.fetch_all", fake_fetch_all)
 
@@ -22,4 +24,5 @@ async def test_jobs_velocity_uses_category_placeholders(monkeypatch: pytest.Monk
 
     await esi.close()
 
-    assert rows == [{"typeName": "Test Item", "w1": 1}]
+    assert rows == [{"typeName": "Test Item", "w1": 1.5}]
+    assert isinstance(rows[0]["w1"], float)
