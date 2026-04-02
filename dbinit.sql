@@ -118,6 +118,7 @@ ALTER TABLE corpWalletJournal MODIFY contextIDType VARCHAR(100);
 
 CREATE TABLE IF NOT EXISTS corpWalletTransactions (
     transactionID BIGINT NOT NULL PRIMARY KEY,
+    wallet INT,
     clientID INT,
     date DATETIME,
     isBuy TINYINT(1),

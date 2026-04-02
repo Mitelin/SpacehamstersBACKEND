@@ -461,12 +461,25 @@ def create_app() -> Starlette:
         log(2, f"GET /api/corporation/{corporation_id}/wallet/{wallet}/volumes")
         try:
             await request.app.state.user_info.validate_token(request.headers.get("authorization"))
-            items = await request.app.state.wallet_transactions_service.get_type_volumes()
+            items = await request.app.state.wallet_transactions_service.get_type_volumes(wallet)
             return JSONResponse(items)
         except Exception as exc:
             return PlainTextResponse(f"Chyba: {exc}")
         finally:
             log(1, f"GET /api/corporation/{corporation_id}/wallet/{wallet}/volumes finished")
+
+    async def get_wallet_transactions_velocity(request: Request) -> Response:
+        corporation_id = int(request.path_params["corporation_id"])
+        wallet = int(request.path_params["wallet"])
+        log(2, f"GET /api/corporation/{corporation_id}/wallet/{wallet}/transactions/velocity")
+        try:
+            await request.app.state.user_info.validate_token(request.headers.get("authorization"))
+            items = await request.app.state.wallet_transactions_service.get_type_sales_velocity(wallet)
+            return JSONResponse(items)
+        except Exception as exc:
+            return PlainTextResponse(f"Chyba: {exc}")
+        finally:
+            log(1, f"GET /api/corporation/{corporation_id}/wallet/{wallet}/transactions/velocity finished")
 
     routes = [
         Route("/api/userInfo", post_user_info, methods=["POST"]),
@@ -509,6 +522,11 @@ def create_app() -> Starlette:
         Route(
             "/api/corporation/{corporation_id:int}/wallets/{wallet:int}/transactions/sync",
             get_wallet_transactions_sync,
+            methods=["GET"],
+        ),
+        Route(
+            "/api/corporation/{corporation_id:int}/wallets/{wallet:int}/transactions/velocity",
+            get_wallet_transactions_velocity,
             methods=["GET"],
         ),
         Route(

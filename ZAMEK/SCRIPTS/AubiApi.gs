@@ -3,6 +3,7 @@
  */ 
 const Aubi = (()=>{
   const aubiApi = 'https://www.spacehamsters.eu/api'
+  const industryWallet = 6
   const options_get = {
     'method' : 'get',
     "headers" : {    
@@ -110,7 +111,7 @@ const Aubi = (()=>{
      * synchronizes wallet transactions in Aubi DB
      */
     syncWalletTransactions: function() {
-      var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/wallets/7/transactions/sync', authorized_options_get());
+      var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/wallets/' + industryWallet + '/transactions/sync', authorized_options_get());
 
       // parse response to object
       var res = response.getContentText();
@@ -234,9 +235,15 @@ const Aubi = (()=>{
     },
 
     getTypeVolumes: function() {
-      var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/wallets/7/volumes', authorized_options_get());
+      var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/wallets/' + industryWallet + '/volumes', authorized_options_get());
 
       return parseAubiJsonResponse_(response, 'Aubi.getTypeVolumes');
+    },
+
+    getSalesVelocity: function() {
+      var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/wallets/' + industryWallet + '/transactions/velocity', authorized_options_get());
+
+      return parseAubiJsonResponse_(response, 'Aubi.getSalesVelocity');
     }
 
   }
@@ -293,4 +300,8 @@ function testAubiGetWalletJournal() {
 
 function testAubiGetIndustryVelocity() {
   console.log(Aubi.getIndustryVelocity([6,7]));
+}
+
+function testAubiGetSalesVelocity() {
+  console.log(Aubi.getSalesVelocity());
 }

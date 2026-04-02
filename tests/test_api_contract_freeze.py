@@ -28,6 +28,7 @@ EXPECTED_ROUTES: set[tuple[str, str]] = {
     ("POST", "/api/corporation/{corporation_id:int}/wallets/{wallet:int}/journal/report"),
     ("GET", "/api/corporation/{corporation_id:int}/wallets/{wallet:int}/journal/sync"),
     ("GET", "/api/corporation/{corporation_id:int}/wallets/{wallet:int}/transactions/sync"),
+    ("GET", "/api/corporation/{corporation_id:int}/wallets/{wallet:int}/transactions/velocity"),
     ("GET", "/api/corporation/{corporation_id:int}/wallets/{wallet:int}/pl/{year:int}/{month:int}"),
     ("GET", "/api/corporation/{corporation_id:int}/wallets/{wallet:int}/volumes"),
 }

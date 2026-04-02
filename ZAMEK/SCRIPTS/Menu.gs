@@ -19,6 +19,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Načíst: Ceník (Marketeer)', 'getPricesMarketeer')
     .addItem('Načíst: Ceník (Tycoon)', 'getPricesTycoon')
+    .addItem('T2 Market: Přepočítat adjustment', 'runUpdateT2MarketAdjustments')
     .addItem('Spočítat: Výkupní ceny Ore a Modulů', 'pricelistCalculateOre')
     .addItem('Spočítat: Objemy nákupu a prodeje', 'pricelistGetVolumes')
     .addItem('Načíst: Sklady', 'syncAssets')

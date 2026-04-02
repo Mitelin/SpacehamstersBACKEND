@@ -1,0 +1,29 @@
+[
+  {
+    "activeDays30d": 4,
+    "activeDays90d": 8,
+    "avgDaily30d": 0.3333,
+    "avgDaily90d": 0.2444,
+    "firstSellDate": "2026-01-15 09:00:00",
+    "lastSellDate": "2026-04-01 12:34:56",
+    "sold30d": 10,
+    "sold60d": 15,
+    "sold7d": 3,
+    "sold90d": 22,
+    "typeID": 34,
+    "typeName": "Tritanium",
+    "w1": 3,
+    "w10": 2,
+    "w11": 1,
+    "w12": 1,
+    "w13": 2,
+    "w2": 2,
+    "w3": 1,
+    "w4": 4,
+    "w5": 0,
+    "w6": 2,
+    "w7": 1,
+    "w8": 3,
+    "w9": 0
+  }
+]

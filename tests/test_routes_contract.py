@@ -99,7 +99,8 @@ def test_wallet_volumes_uses_user_token(app_client, monkeypatch: pytest.MonkeyPa
 
     captured = {}
 
-    async def get_type_volumes():
+    async def get_type_volumes(wallet: int):
+        captured["wallet"] = wallet
         captured["called"] = True
         return [{"typeID": 1}]
 
@@ -109,6 +110,30 @@ def test_wallet_volumes_uses_user_token(app_client, monkeypatch: pytest.MonkeyPa
     assert resp.status_code == 200
     assert resp.json() == [{"typeID": 1}]
     assert captured.get("called") is True
+    assert captured.get("wallet") == 1
+
+
+def test_wallet_transactions_velocity_uses_user_token(app_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = app_client.app
+    _set_auth(app, monkeypatch, user_token="user", ceo_token="ceo")
+
+    captured = {}
+
+    async def get_type_sales_velocity(wallet: int):
+        captured["wallet"] = wallet
+        captured["called"] = True
+        return [{"typeID": 1, "sold90d": 9}]
+
+    monkeypatch.setattr(app.state.wallet_transactions_service, "get_type_sales_velocity", get_type_sales_velocity)
+
+    resp = app_client.get(
+        "/api/corporation/123/wallets/1/transactions/velocity",
+        headers={"authorization": "Bearer x"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == [{"typeID": 1, "sold90d": 9}]
+    assert captured.get("called") is True
+    assert captured.get("wallet") == 1
 
 
 def test_wallet_pl_invalid_month_returns_chyba(app_client, monkeypatch: pytest.MonkeyPatch) -> None:
