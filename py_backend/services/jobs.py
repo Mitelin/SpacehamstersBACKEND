@@ -152,8 +152,13 @@ class JobsService:
         return _jsonable_rows(rows)
 
     async def get_jobs_velocity(self, categories: Any) -> list[dict[str, Any]]:
+        category_ids = [int(c) for c in (categories or [6, 7])]
+        if not category_ids:
+            category_ids = [6, 7]
+        category_placeholders = ", ".join(["%s"] * len(category_ids))
+
         return await db.fetch_all(
-            """
+            f"""
             SELECT t.typeName, j0.cnt as w0, j1.cnt as w1, j2.cnt as w2, j3.cnt as w3, j4.cnt as w4, j5.cnt as w5,
                    j6.cnt as w6, j7.cnt as w7, j8.cnt as w8, j9.cnt as w9, j10.cnt as w10
             FROM invGroups g
@@ -169,12 +174,12 @@ class JobsService:
             LEFT JOIN (SELECT sum(runs) as cnt, productTypeID FROM corpJobs WHERE completedDate >=  DATE(NOW() - INTERVAL 7 * 8 DAY) AND completedDate <  DATE(NOW() - INTERVAL 7 * 7 DAY) GROUP BY productTypeID) j8 on t.typeID = j8.productTypeID
             LEFT JOIN (SELECT sum(runs) as cnt, productTypeID FROM corpJobs WHERE completedDate >=  DATE(NOW() - INTERVAL 7 * 9 DAY) AND completedDate <  DATE(NOW() - INTERVAL 7 * 8 DAY) GROUP BY productTypeID) j9 on t.typeID = j9.productTypeID
             LEFT JOIN (SELECT sum(runs) as cnt, productTypeID FROM corpJobs WHERE completedDate >=  DATE(NOW() - INTERVAL 7 * 10 DAY) AND completedDate <  DATE(NOW() - INTERVAL 7 * 9 DAY) GROUP BY productTypeID) j10 on t.typeID = j10.productTypeID
-            where g.categoryID in (6, 7)
+                        where g.categoryID in ({category_placeholders})
               and (j1.cnt is not null or j2.cnt is not null or j3.cnt is not null or j4.cnt is not null or j5.cnt is not null
                    or j6.cnt is not null or j7.cnt is not null or j8.cnt is not null or j9.cnt is not null or j10.cnt is not null)
             order by t.typeName
             """,
-            [categories],
+                        category_ids,
         )
 
     async def get_all_jobs_direct(self, corporation_id: int, access_token: str) -> list[dict[str, Any]]:
