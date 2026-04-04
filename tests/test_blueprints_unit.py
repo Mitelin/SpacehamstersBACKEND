@@ -33,3 +33,36 @@ def test_add_job_preserves_lowest_level_for_direct_target() -> None:
     assert result["jobs"][0]["runs"] == 15
     assert result["jobs"][0]["level"] == 1
     assert result["jobs"][0]["runs"] * result["jobs"][0]["quantity"] == 150
+
+
+def test_add_job_keeps_distinct_invention_outputs_separate() -> None:
+    result = {"jobs": []}
+    fury_blueprint_product = {
+        "blueprintTypeId": 501,
+        "blueprint": "Inferno Cruise Missile Blueprint",
+        "time": 60,
+        "quantity": 10,
+        "productTypeID": 601,
+        "product": "Inferno Fury Cruise Missile Blueprint",
+        "probability": None,
+        "maxProductionLimit": 300,
+    }
+    precision_blueprint_product = {
+        "blueprintTypeId": 501,
+        "blueprint": "Inferno Cruise Missile Blueprint",
+        "time": 60,
+        "quantity": 10,
+        "productTypeID": 602,
+        "product": "Inferno Precision Cruise Missile Blueprint",
+        "probability": None,
+        "maxProductionLimit": 300,
+    }
+
+    add_job(result, amount=1200, level=9, job_type="Invention", blueprint_product=fury_blueprint_product, bp_te=0, materials=[], is_advanced=False)
+    add_job(result, amount=1200, level=9, job_type="Invention", blueprint_product=precision_blueprint_product, bp_te=0, materials=[], is_advanced=False)
+
+    assert len(result["jobs"]) == 2
+    assert {job["product"] for job in result["jobs"]} == {
+        "Inferno Fury Cruise Missile Blueprint",
+        "Inferno Precision Cruise Missile Blueprint",
+    }

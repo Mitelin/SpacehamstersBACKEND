@@ -167,7 +167,14 @@ def add_job(
         (
             j
             for j in result["jobs"]
-            if j["blueprintTypeId"] == blueprint_product["blueprintTypeId"] and j["type"] == job_type
+            if j["blueprintTypeId"] == blueprint_product["blueprintTypeId"]
+            and j["type"] == job_type
+            and j["productTypeID"]
+            == (
+                blueprint_product["blueprintTypeId"]
+                if job_type == "Copying"
+                else blueprint_product["productTypeID"]
+            )
         ),
         None,
     )
