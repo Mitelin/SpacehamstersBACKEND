@@ -96,7 +96,8 @@ const Aubi = (()=>{
      * synchronizes wallet journal in Aubi DB
      * wallet: wallet number 1 - 7
      */
-    syncWalletJournal: function(wallet) {
+    syncWalletJournal: function(wallet, options) {
+      options = options || {};
       var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/wallets/'+ wallet + '/journal/sync', authorized_options_get());
 
       // parse response to object
@@ -104,7 +105,11 @@ const Aubi = (()=>{
       Logger.log(res);
 
       // show result in notification window
-      SpreadsheetApp.getUi().alert('Synchronizace dokončena.', res, SpreadsheetApp.getUi().ButtonSet.OK);
+      if (!options.silent) {
+        SpreadsheetApp.getUi().alert('Synchronizace dokončena.', res, SpreadsheetApp.getUi().ButtonSet.OK);
+      }
+
+      return res;
     },
 
     /*

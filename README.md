@@ -312,6 +312,10 @@ Note: scheduler/ESI sync requires that the CEO OAuth token exists in DB (via `PO
 
 ## History migration (from old backend)
 
+New backend now refreshes `corpWalletJournalReportMonthly` automatically for months touched by wallet journal sync, so freshly-synced months keep their monthly bounty snapshot inside the new backend DB.
+
+Important: this does not reconstruct months that were already missing before sync/snapshot maintenance existed. Older pre-cutover bounty history still requires a one-time backfill into `corpWalletJournalReportMonthly`.
+
 If you did not migrate the old MariaDB, historical monthly reports (jobs history and bounty/ratting) can be restored from the old running backend into snapshot tables.
 
 - Script: [tools/migrate_history_from_old_backend.py](tools/migrate_history_from_old_backend.py)

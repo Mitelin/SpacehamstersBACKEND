@@ -466,10 +466,19 @@ const Corporation = (()=>{
       var year = data[0][0];
       var month = data[1][0];
 
+      if (!(year > 2020 && year < 2050)) {
+        SpreadsheetApp.getUi().alert('Chyba!', 'Neplatný rok ' + year, SpreadsheetApp.getUi().ButtonSet.OK);
+        return;
+      }
+      if (!(month > 0 && month < 13)) {
+        SpreadsheetApp.getUi().alert('Chyba!', 'Neplatný měsíc ' + month, SpreadsheetApp.getUi().ButtonSet.OK);
+        return;
+      }
+
       // clear last results
       var lastRow = bountySheet.getLastRow();
       if (lastRow > 1) {
-        var range = bountySheet.getRange(2, 1, lastRow, 3);
+        var range = bountySheet.getRange(2, 1, lastRow - 1, 3);
         range.setValue('');
       }
 
@@ -480,6 +489,25 @@ const Corporation = (()=>{
       range = bountySheet.getRange(2, 1, rows.length, 5);
       range.setValues(rows);
 */
+      const writeBountyRows = function(items) {
+        if (items.length <= 0) return false;
+
+        // translate party to name
+        var translated = items.map(a => ({ amount : a.amount, name : Universe.getName(a.secondPartyId).name}));
+        console.log(translated)
+
+        // translate to rows and get character main name
+        var rows = translated.map(a => 
+          [ a.name,
+            Universe.getMainName(a.name),
+            a.amount
+          ]);
+
+        range = bountySheet.getRange(2, 1, rows.length, 3);
+        range.setValues(rows);
+        return true;
+      };
+
       // get bounty from historized tables on AubiApi
       let bounty = Aubi.getWalletJournal(1, year, month, ['bounty_prizes','ess_escrow_transfer']);
       console.log(bounty);
@@ -487,19 +515,31 @@ const Corporation = (()=>{
       [ { amount: 213685.44, secondPartyId: 92425760 },
         { amount: 37284562.32, secondPartyId: 93015796 },
 */
-      // translate party to name
-      var translated = bounty.map(a => ({ amount : a.amount, name : Universe.getName(a.secondPartyId).name}));
-      console.log(translated)
+      if (writeBountyRows(bounty)) {
+        return;
+      }
 
-      // translate to rows and get character main name
-      var rows = translated.map(a => 
-        [ a.name,
-          Universe.getMainName(a.name),
-          a.amount
-        ]);
+      const now = new Date();
+      const isCurrentMonth = Number(year) === now.getFullYear() && Number(month) === (now.getMonth() + 1);
+      if (isCurrentMonth) {
+        SpreadsheetApp.getActive().toast('Bounty: backend vrátil prázdný report, zkouším synchronizaci wallet journalu...', 'Bounty', 8);
+        try {
+          Aubi.syncWalletJournal(1, { silent: true });
+          bounty = Aubi.getWalletJournal(1, year, month, ['bounty_prizes','ess_escrow_transfer']);
+          if (writeBountyRows(bounty)) {
+            SpreadsheetApp.getActive().toast('Bounty: data byla po synchronizaci načtena.', 'Bounty', 5);
+            return;
+          }
+        } catch (e) {
+          SpreadsheetApp.getActive().toast('Bounty: automatická synchronizace wallet journalu selhala: ' + e, 'Bounty', 10);
+          return;
+        }
+      }
 
-      range = bountySheet.getRange(2, 1, rows.length, 3);
-      range.setValues(rows);
+      const message = isCurrentMonth
+        ? 'Pro aktuální měsíc backend nevrátil bounty data ani po synchronizaci wallet journalu.'
+        : 'Backend pro zvolený měsíc nevrátil bounty data. To značí, že v backend DB chybí historická wallet data nebo měsíční snapshot pro tento měsíc.';
+      SpreadsheetApp.getActive().toast(message, 'Bounty', 8);
 
     },
 

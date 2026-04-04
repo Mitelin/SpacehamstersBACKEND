@@ -35,6 +35,7 @@ class WalletJournalService:
             page = 1
             cnt = 0
             max_page = 1
+            touched_months: set[tuple[int, int]] = set()
             while page <= max_page:
                 resp = await self._esi.get(
                     f"/corporations/{corporation_id}/wallets/{wallet}/journal/",
@@ -44,8 +45,13 @@ class WalletJournalService:
                 max_page = parse_x_pages(resp)
                 if resp.status_code != 200:
                     raise RuntimeError(resp.reason_phrase)
-                cnt += await self.store(resp.json())
+                items = resp.json()
+                touched_months.update(_extract_year_months(items))
+                cnt += await self.store(items)
                 page += 1
+
+            if touched_months:
+                await self.refresh_monthly_snapshots(wallet, touched_months)
             return cnt
 
     async def sync_names(self, access_token: str) -> int:
@@ -113,6 +119,31 @@ class WalletJournalService:
                         [item.get("id"), item.get("name"), item.get("category")],
                     )
                     cnt += 1
+        return cnt
+
+    async def refresh_monthly_snapshots(self, wallet: int, months: set[tuple[int, int]]) -> int:
+        cnt = 0
+        async with db.connection() as conn:
+            async with conn.cursor() as cur:
+                for year, month in sorted(months):
+                    month_start = f"{int(year):04d}-{int(month):02d}-01"
+                    await cur.execute(
+                        "DELETE FROM corpWalletJournalReportMonthly WHERE wallet=%s AND year=%s AND month=%s",
+                        [int(wallet), int(year), int(month)],
+                    )
+                    await cur.execute(
+                        """
+                        INSERT INTO corpWalletJournalReportMonthly (
+                            wallet, year, month, refType, secondPartyId, amount
+                        )
+                        SELECT %s, %s, %s, refType, secondPartyId, SUM(amount)
+                        FROM corpWalletJournal
+                        WHERE date >= %s AND date < DATE_ADD(%s, INTERVAL 1 MONTH)
+                        GROUP BY refType, secondPartyId
+                        """,
+                        [int(wallet), int(year), int(month), month_start, month_start],
+                    )
+                    cnt += max(int(cur.rowcount), 0)
         return cnt
 
     async def get_report(self, wallet: int, year: int, month: int, types: Any) -> list[dict[str, Any]]:
@@ -233,3 +264,23 @@ def _normalize_types(types: Any) -> list[str]:
     if isinstance(types, (list, tuple)):
         return [str(t) for t in types if t is not None and str(t) != ""]
     return [str(types)]
+
+
+def _extract_year_months(items: list[dict[str, Any]]) -> set[tuple[int, int]]:
+    months: set[tuple[int, int]] = set()
+    for item in items or []:
+        value = item.get("date")
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.strptime(str(value)[:19], "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                try:
+                    parsed = datetime.strptime(str(value)[:19], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+        months.add((parsed.year, parsed.month))
+    return months
