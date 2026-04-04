@@ -186,7 +186,7 @@ def add_job(
 
     if existing:
         existing["runs"] += runs
-        if existing["level"] < level:
+        if existing["level"] > level:
             existing["level"] = level
         if materials:
             for i in range(len(materials)):

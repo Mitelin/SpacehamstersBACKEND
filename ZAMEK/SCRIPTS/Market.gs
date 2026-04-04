@@ -4,6 +4,10 @@ const Market = (()=>{
   const buildCostCol = 11;    // K
   const t2AdjustmentsCol = 15; // O
   const t2AdjustmentHeaders = [
+    'Type name',
+    'Boost qty',
+    'Base target',
+    'Adjusted target',
     'Listed now',
     'In progress',
     'Sold 7d',
@@ -102,6 +106,26 @@ const Market = (()=>{
     const remainder = n % magnitude;
     if (remainder === 0) return n;
     return (leading + 1) * magnitude;
+  };
+  const getAdjustmentStep_ = (baseTarget) => {
+    const target = Math.max(1, Math.ceil(toFiniteNumber_(baseTarget, 1)));
+    if (target >= 200) return 10;
+    if (target >= 100) return 5;
+    if (target >= 40) return 2;
+    return 1;
+  };
+  const roundAdjustedTarget_ = (baseTarget, multiplier) => {
+    const base = Math.max(1, Math.ceil(toFiniteNumber_(baseTarget, 1)));
+    const factor = toFiniteNumber_(multiplier, 1);
+    if (!isFinite(factor) || factor <= 0) return base;
+    if (Math.abs(factor - 1) < 0.0001) return base;
+
+    const rawTarget = base * factor;
+    const step = getAdjustmentStep_(base);
+    if (factor > 1) {
+      return Math.max(base + step, Math.ceil(rawTarget / step) * step);
+    }
+    return Math.max(1, Math.floor(rawTarget / step) * step);
   };
   const getT2MarketBuildCostConfig_ = () => {
     const config = {
@@ -419,9 +443,14 @@ const Market = (()=>{
     }
 
     appliedMultiplier = clamp_(appliedMultiplier, T2_ADJUSTMENT_MIN_MULTIPLIER, T2_ADJUSTMENT_MAX_MULTIPLIER);
-    const adjustedTarget = Math.max(1, roundUpToHighestPlace_(baseTarget * appliedMultiplier));
+    const adjustedTarget = roundAdjustedTarget_(baseTarget, appliedMultiplier);
+    const boostDelta = adjustedTarget - baseTarget;
+    if (boostDelta === 0 && action !== 'cooldown') {
+      action = 'hold';
+    }
 
     return {
+      baseTarget: baseTarget,
       listedNow: listedNow,
       inProgress: inProgress,
       sold7d: sold7d,
@@ -433,6 +462,7 @@ const Market = (()=>{
       trend: roundMetric_(trendRatio, 2),
       recommendedMultiplier: roundMetric_(recommendedMultiplier, 4),
       appliedMultiplier: roundMetric_(appliedMultiplier, 4),
+      boostDelta: boostDelta,
       adjustedTarget: adjustedTarget,
       action: action,
       reason: reason,
@@ -842,6 +872,9 @@ const Market = (()=>{
       if (!(sheetName.endsWith("Market"))) {
         throw ("Makro lze spistit jen z sheetu Market")
       }
+      if (sheetName === 'T2 Market') {
+        throw ("Makro Item Build Availability nelze spustit nad T2 Market, protoze by prepsalo boost sloupce O:P a diagnostiku")
+      }
       var lastRow = sheet.getLastRow();
 
       // Get the hangar Id - hangar name is in row 1 col 4
@@ -1018,6 +1051,10 @@ const Market = (()=>{
         });
 
         rowsOut.push([
+          typeName,
+          result.boostDelta,
+          result.baseTarget,
+          result.adjustedTarget,
           result.listedNow,
           result.inProgress,
           result.sold7d,

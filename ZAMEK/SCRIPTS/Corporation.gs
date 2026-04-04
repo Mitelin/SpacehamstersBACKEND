@@ -110,6 +110,24 @@ const Corporation = (()=>{
     _freezeMemo = on ? true : false;
   }
 
+  var _blueprintMatchesHangar = function(item, hangar) {
+    if (!item || !hangar) return false;
+
+    if (item.locationId == hangar.locationID) {
+      if (hangar.locationType != 'station') return true;
+      if (!hangar.locationFlag) return true;
+      return item.locationFlag == hangar.locationFlag;
+    }
+
+    // Corporate blueprints can report a different station/root location ID than assets,
+    // but still retain the correct division locationFlag.
+    if (hangar.locationType == 'station' && hangar.locationFlag) {
+      return item.locationFlag == hangar.locationFlag;
+    }
+
+    return false;
+  }
+
   const corpSAGMap = new Map();
   corpSAGMap.set('CorpSAG1', 'Research');
   corpSAGMap.set('CorpSAG2', 'Industry skladka');
@@ -317,7 +335,12 @@ const Corporation = (()=>{
       var assetsFiltered;
       
       if (hangars) {
-        assetsFiltered = assets.data.filter(item => {return (hangars.some(hangar => hangar.locationID == item.location_id))});
+        assetsFiltered = assets.data.filter(item => {
+          return hangars.some(hangar => _blueprintMatchesHangar({
+            locationId: item.location_id,
+            locationFlag: item.location_flag,
+          }, hangar));
+        });
       } else assetsFiltered = assets.data;
 
 //      console.log(assetsFiltered);
@@ -1341,7 +1364,7 @@ const Corporation = (()=>{
       var blueprintsFiltered;
       if (hangars != null) {
         blueprintsFiltered = blueprints.data.filter(item => {
-          return (hangars.some(hangar => hangar.locationID == item.locationId))
+          return hangars.some(hangar => _blueprintMatchesHangar(item, hangar));
         });
       } else {
         blueprintsFiltered = blueprints.data;

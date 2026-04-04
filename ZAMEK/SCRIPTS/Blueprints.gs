@@ -32,6 +32,13 @@ const Blueprints = (()=>{
       .toLowerCase();
   };
 
+  const isBlueprintLikeName = function(value) {
+    const normalized = normalizeIndustryKeyPart(value);
+    return normalized.endsWith(' blueprint')
+      || normalized.endsWith(' reaction formula')
+      || normalized.endsWith(' formula');
+  };
+
   const buildBlueprintNameAliases = function(value) {
     const normalized = normalizeIndustryKeyPart(value);
     if (!normalized) return [];
@@ -106,11 +113,57 @@ const Blueprints = (()=>{
     return map;
   };
 
+  const addQuantityRowsToProductActionMap = function(map, rows) {
+    if (!map || !rows || rows.length === 0) return map;
+
+    rows.forEach(row => {
+      const key = buildProductActionKey(row[0], row[2]);
+      const quantity = Number(row[1]) || 0;
+      if (!key || quantity === 0) return;
+      map.set(key, (map.get(key) || 0) + quantity);
+    });
+
+    return map;
+  };
+
   const getQuantityFromMap = function(map, name) {
     if (!map) return 0;
     const key = normalizeIndustryKeyPart(name);
     if (!key) return 0;
     return Number(map.get(key)) || 0;
+  };
+
+  const getQuantityFromProductActionMap = function(map, name, action) {
+    if (!map) return 0;
+    const key = buildProductActionKey(name, action);
+    if (!key) return 0;
+    return Number(map.get(key)) || 0;
+  };
+
+  const resolvePreferredProductRow = function(rowsByProductKey, rows, productName) {
+    const key = normalizeIndustryKeyPart(productName);
+    if (!key || !rowsByProductKey) return -1;
+
+    const indices = rowsByProductKey.get(key) || [];
+    if (indices.length === 0) return -1;
+    if (indices.length === 1) return indices[0];
+
+    const preferredActions = isBlueprintLikeName(productName)
+      ? ['Copying']
+      : ['Manufacturing', 'Reaction'];
+
+    for (let i = 0; i < preferredActions.length; i++) {
+      const preferredAction = preferredActions[i];
+      const preferredIndex = indices.find(index => rows[index] && rows[index][3] === preferredAction);
+      if (preferredIndex != null) return preferredIndex;
+    }
+
+    if (!isBlueprintLikeName(productName)) {
+      const nonInventionIndex = indices.find(index => rows[index] && rows[index][3] !== 'Invention');
+      if (nonInventionIndex != null) return nonInventionIndex;
+    }
+
+    return indices[0];
   };
 
   const parseJsonResponseSafe_ = function(response, sourceLabel, options) {
@@ -311,7 +364,7 @@ const Blueprints = (()=>{
    *   - nazev produktu
    *   - vyrobene mnozstvi
    */
-  var getFinishedJobProducts = function (plannedJobs, deliveredJobs, hangarId) {
+  var getFinishedJobProducts = function (plannedJobs, deliveredJobs, hangarId, includeAction) {
     var ret = [];
     if (!plannedJobs || plannedJobs.length === 0 || !deliveredJobs || deliveredJobs.length === 0) return ret;
 
@@ -382,7 +435,11 @@ const Blueprints = (()=>{
           }
 
           trace("Finished " + job.activityName + " " + runs + " runs of " + job.productName + " from " + job.blueprintName + " in batch of " + batchSize + " items");
-          ret.push([job.productName, runs * batchSize])
+          if (includeAction) {
+            ret.push([job.productName, runs * batchSize, job.activityName])
+          } else {
+            ret.push([job.productName, runs * batchSize])
+          }
       }
     })
     return ret;
@@ -743,13 +800,17 @@ const Blueprints = (()=>{
       });
 
       // Build lookup maps to avoid repeated O(n) findIndex/find
-      const plannedIndexByProduct = new Map();
+      const plannedRowsByProductKey = new Map();
       const plannedIndexByBlueprintAction = new Map();
       const plannedIndexByProductAction = new Map();
       for (let r = 0; r < plannedCount; r++) {
         const productName = plannedJobs[r][0];
-        if (productName && !plannedIndexByProduct.has(productName)) {
-          plannedIndexByProduct.set(productName, r);
+        const productKey = normalizeIndustryKeyPart(productName);
+        if (productKey) {
+          if (!plannedRowsByProductKey.has(productKey)) {
+            plannedRowsByProductKey.set(productKey, []);
+          }
+          plannedRowsByProductKey.get(productKey).push(r);
         }
         const productActionKey = buildProductActionKey(plannedJobs[r][0], plannedJobs[r][3]);
         if (productActionKey && !plannedIndexByProductAction.has(productActionKey)) {
@@ -938,7 +999,7 @@ const Blueprints = (()=>{
             materials.forEach(material => {
               trace("::: Material: " + material.type + " quantity: " + material.quantity);
 
-              let pos = plannedIndexByProduct.has(material.type) ? plannedIndexByProduct.get(material.type) : -1;
+              let pos = resolvePreferredProductRow(plannedRowsByProductKey, plannedJobs, material.type);
               if (pos >= 0) {
                 // if job is found, increase job output amount
                 // recalculate required amount by batchsize
@@ -1041,9 +1102,11 @@ const Blueprints = (()=>{
       let allRunningJobs;
       let deliveredReadyByProduct;
       let deliveredReadyByBucket;
+      let availableBlueprintRunsByName;
       _time(_sheetName + ' recalc load corp context', () => {
         bpos = Corporation.loadBPOs();                // load BPOs from cache
         const assetSnapshot = Corporation.getAssetsCached(hangarContext.hangars);
+        const blueprintSnapshot = Corporation.getBlueprintsCached(hangarContext.hangars);
         allJobs = Corporation.getJobsCached(hangarContext.hangars, true);
         allRunningJobs = allJobs.data.filter(item => item.status == 'active');   // filter only running jobs
 
@@ -1051,17 +1114,53 @@ const Blueprints = (()=>{
           item.status == 'delivered' && item.completedTime > assetSnapshot.lastModified
         ));
 
-        deliveredReadyByProduct = addQuantityRowsToMap(new Map(), getFinishedJobProducts(plannedJobs, deliveredJobs));
+        deliveredReadyByProduct = addQuantityRowsToProductActionMap(
+          new Map(),
+          getFinishedJobProducts(plannedJobs, deliveredJobs, null, true)
+        );
         deliveredReadyByBucket = new Map();
         Object.keys(hangarContext.bucketHangars).forEach(bucketKey => {
           const bucketHangars = hangarContext.bucketHangars[bucketKey] || [];
           const projectedRows = [];
           bucketHangars.forEach(hangar => {
-            const rows = getFinishedJobProducts(plannedJobs, deliveredJobs, hangar.locationID);
+            const rows = getFinishedJobProducts(plannedJobs, deliveredJobs, hangar.locationID, true);
             rows.forEach(row => projectedRows.push(row));
           });
-          deliveredReadyByBucket.set(Number(bucketKey), addQuantityRowsToMap(new Map(), projectedRows));
+          deliveredReadyByBucket.set(Number(bucketKey), addQuantityRowsToProductActionMap(new Map(), projectedRows));
         });
+
+        const blueprintCopies = blueprintSnapshot.data
+          .filter(item => Number(item.runs) >= 0)
+          .map(item => ({ itemId: item.itemId, typeName: item.typeName, runs: Number(item.runs) || 0 }));
+        const bpcJobRunsByBlueprintId = {};
+        for (let j = 0; j < allJobs.data.length; j++) {
+          const job = allJobs.data[j];
+          const blueprintId = job.blueprintId;
+          if (blueprintId == null) continue;
+          if (bpcJobRunsByBlueprintId[blueprintId] != null) continue;
+          if (job.status === 'active' || job.completedTime > blueprintSnapshot.lastModified) {
+            bpcJobRunsByBlueprintId[blueprintId] = Number(job.runs) || 0;
+          }
+        }
+
+        availableBlueprintRunsByName = new Map();
+        blueprintCopies.forEach(bpc => {
+          const runsInUse = bpcJobRunsByBlueprintId[bpc.itemId];
+          const availableRuns = bpc.runs - (runsInUse != null ? runsInUse : 0);
+          if (availableRuns > 0) {
+            addQuantityRowsToMap(availableBlueprintRunsByName, [[bpc.typeName, availableRuns]]);
+          }
+        });
+
+        const deliveredResearchJobs = allJobs.data.filter(item => (
+          (item.activityName == 'Copying' || item.activityName == 'Invention')
+          && item.status == 'delivered'
+          && item.completedTime > blueprintSnapshot.lastModified
+        ));
+        addQuantityRowsToMap(
+          availableBlueprintRunsByName,
+          getFinishedJobProducts(plannedJobs, deliveredResearchJobs)
+        );
       });
       trace(allRunningJobs);
 
@@ -1077,7 +1176,7 @@ const Blueprints = (()=>{
         let inprogress = Number(refreshedJob[11]) || 0;
         let required = Number(refreshedJob[12]) || 0;
         let ready = Number(refreshedJob[13]) || 0;
-        const deliveredReadyFallback = getQuantityFromMap(deliveredReadyByProduct, product);
+        const deliveredReadyFallback = getQuantityFromProductActionMap(deliveredReadyByProduct, product, action);
         const effectiveReady = (ready < required && deliveredReadyFallback > 0)
           ? Math.min(required, ready + deliveredReadyFallback)
           : ready;
@@ -1122,23 +1221,30 @@ const Blueprints = (()=>{
           if (materials) {
             materials.forEach(material => {
               let materialVolume = 0;
+              const blueprintLikeMaterial = isBlueprintLikeName(material.type);
 
               // find amount in input materials
               let materialRecord = (inputIndexByName.has(material.type) ? refreshedInputMaterials[inputIndexByName.get(material.type)] : null);
-              if (materialRecord) materialVolume += materialRecord[15 + sourceHangar];
+              if (blueprintLikeMaterial) {
+                materialVolume += getQuantityFromMap(availableBlueprintRunsByName, material.type);
+              } else if (materialRecord) {
+                materialVolume += materialRecord[15 + sourceHangar];
+              }
 
               // find amount in job output
-              let jobRecord = (plannedIndexByProduct.has(material.type) ? refreshedPlannedJobs[plannedIndexByProduct.get(material.type)] : null);
-              if (jobRecord) {
+              let jobRecordIndex = resolvePreferredProductRow(plannedRowsByProductKey, refreshedPlannedJobs, material.type);
+              let jobRecord = (jobRecordIndex >= 0) ? refreshedPlannedJobs[jobRecordIndex] : null;
+              const materialAction = jobRecord ? jobRecord[3] : '';
+              if (jobRecord && !blueprintLikeMaterial) {
                 materialVolume += jobRecord[14 + sourceHangar];
                 if (sourceHangarAlt) materialVolume += jobRecord[14 + sourceHangarAlt];
               }
 
               // material quantity for one run must be less than material available in hangar to start job
               let missingVolume = (material.quantity / runs) - materialVolume;
-              if (missingVolume > 0) {
-                let projectedDelivered = getQuantityFromMap(deliveredReadyByBucket.get(sourceHangar), material.type);
-                if (sourceHangarAlt) projectedDelivered += getQuantityFromMap(deliveredReadyByBucket.get(sourceHangarAlt), material.type);
+              if (missingVolume > 0 && !blueprintLikeMaterial) {
+                let projectedDelivered = getQuantityFromProductActionMap(deliveredReadyByBucket.get(sourceHangar), material.type, materialAction);
+                if (sourceHangarAlt) projectedDelivered += getQuantityFromProductActionMap(deliveredReadyByBucket.get(sourceHangarAlt), material.type, materialAction);
                 if (projectedDelivered > 0) missingVolume -= projectedDelivered;
               }
 
@@ -1445,6 +1551,9 @@ const Blueprints = (()=>{
 
       // get corporation blueprints
       Sidebar.add("Čtu korporátní blueprinty");
+      if (typeof Corporation !== 'undefined' && Corporation.syncBlueprints && (!Corporation.isMemoFrozen || !Corporation.isMemoFrozen())) {
+        _time(_sheetName + ' sync blueprints cache', () => Corporation.syncBlueprints());
+      }
       var bpcs = _time(_sheetName + ' corp blueprints', () => Corporation.getBlueprintsCached(hangarsBPC));
       Sidebar.add("- počet " + bpcs.data.length + " ks");
       Sidebar.add("- stáří " + (bpcs.age / 60).toFixed(2) + " m");
@@ -2453,7 +2562,8 @@ function runUpdateAllProjects() {
         if (Corporation.loadAssets) warmed.assets = _time('warm cache: assets', () => Corporation.loadAssets());
         if (Corporation.syncJobs) warmed.jobs = _time('warm cache: jobs', () => Corporation.syncJobs());
         else if (Corporation.loadJobs) warmed.jobs = _time('warm cache: jobs', () => Corporation.loadJobs());
-        if (Corporation.loadBlueprints) warmed.blueprints = _time('warm cache: blueprints', () => Corporation.loadBlueprints());
+        if (Corporation.syncBlueprints) warmed.blueprints = _time('warm cache: blueprints', () => Corporation.syncBlueprints());
+        else if (Corporation.loadBlueprints) warmed.blueprints = _time('warm cache: blueprints', () => Corporation.loadBlueprints());
 
         // Publish cache expiry info for the sidebar footer.
         if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
