@@ -14,6 +14,7 @@ def _required_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DB_NAME", "test")
     monkeypatch.setenv("CORPORATION_ID", "123")
     monkeypatch.setenv("CEO_CHARACTER_ID", "456")
+    monkeypatch.setenv("INDUSTRY_WALLET", "6")
     monkeypatch.setenv("ENABLE_SCHEDULER", "0")
 
     # reset cached settings between tests

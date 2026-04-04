@@ -343,7 +343,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--old-api-base",
-        default="https://aubi.synology.me:4444/api",
+        required=True,
         help="Old backend API base (must include /api)",
     )
     parser.add_argument("--start", type=_parse_year_month, required=True, help="Start month (YYYY-MM)")

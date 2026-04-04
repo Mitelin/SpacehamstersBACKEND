@@ -22,6 +22,26 @@ def _jsonable_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{k: _jsonable_value(v) for k, v in row.items()} for row in rows]
 
 
+def _extract_year_months(items: list[dict[str, Any]], field_name: str) -> set[tuple[int, int]]:
+    months: set[tuple[int, int]] = set()
+    for item in items or []:
+        value = item.get(field_name)
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.strptime(str(value)[:19], "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                try:
+                    parsed = datetime.strptime(str(value)[:19], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+        months.add((parsed.year, parsed.month))
+    return months
+
+
 class JobsService:
     def __init__(self, esi: ESIClient):
         self._esi = esi
@@ -35,6 +55,7 @@ class JobsService:
             page = 1
             cnt = 0
             max_page = 1
+            touched_months: set[tuple[int, int]] = set()
             while page <= max_page:
                 url = f"/corporations/{corporation_id}/industry/jobs/"
                 resp = await self._esi.get(
@@ -45,8 +66,13 @@ class JobsService:
                 max_page = parse_x_pages(resp)
                 if resp.status_code != 200:
                     raise RuntimeError(resp.reason_phrase)
-                cnt += await self.store(resp.json())
+                items = resp.json()
+                touched_months.update(_extract_year_months(items, "start_date"))
+                cnt += await self.store(items)
                 page += 1
+
+            if touched_months:
+                await self.refresh_monthly_snapshots(touched_months)
             return cnt
 
     async def store(self, jobs: list[dict[str, Any]]) -> int:
@@ -95,6 +121,41 @@ class JobsService:
                 except Exception:
                     await conn.rollback()
                     raise
+        return cnt
+
+    async def refresh_monthly_snapshots(self, months: set[tuple[int, int]]) -> int:
+        cnt = 0
+        async with db.connection() as conn:
+            async with conn.cursor() as cur:
+                for year, month in sorted(months):
+                    month_start = f"{int(year):04d}-{int(month):02d}-01"
+                    await cur.execute(
+                        "DELETE FROM corpJobsReportMonthly WHERE year=%s AND month=%s",
+                        [int(year), int(month)],
+                    )
+                    await cur.execute(
+                        """
+                        INSERT INTO corpJobsReportMonthly (
+                            year, month, installerID,
+                            manufacturing, researchTE, researchME, copying, invention, reaction
+                        )
+                        SELECT
+                            %s,
+                            %s,
+                            j.installerID,
+                            SUM(CASE WHEN j.activityID = 1 THEN j.duration END) AS manufacturing,
+                            SUM(CASE WHEN j.activityID = 3 THEN j.duration END) AS researchTE,
+                            SUM(CASE WHEN j.activityID = 4 THEN j.duration END) AS researchME,
+                            SUM(CASE WHEN j.activityID = 5 THEN j.duration END) AS copying,
+                            SUM(CASE WHEN j.activityID = 8 THEN j.duration END) AS invention,
+                            SUM(CASE WHEN j.activityID = 9 OR j.activityID = 11 THEN j.duration END) AS reaction
+                        FROM corpJobs j
+                        WHERE j.startDate >= %s AND j.startDate < DATE_ADD(%s, INTERVAL 1 MONTH)
+                        GROUP BY j.installerID
+                        """,
+                        [int(year), int(month), month_start, month_start],
+                    )
+                    cnt += max(int(cur.rowcount), 0)
         return cnt
 
     async def get_jobs(self, location_id: int) -> list[dict[str, Any]]:

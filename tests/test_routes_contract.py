@@ -143,3 +143,50 @@ def test_wallet_pl_invalid_month_returns_chyba(app_client, monkeypatch: pytest.M
     resp = app_client.get("/api/corporation/123/wallets/1/pl/2024/13", headers={"authorization": "Bearer x"})
     assert resp.status_code == 200
     assert resp.text.startswith("Chyba: ")
+
+
+def test_scheduler_includes_wallet_transactions_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENABLE_SCHEDULER", "1")
+
+    import py_backend.db as db_module
+    import py_backend.settings as settings_module
+    import py_backend.main as main_module
+
+    settings_module._settings = None
+
+    async def _noop() -> None:
+        return None
+
+    class FakeScheduler:
+        def __init__(self, timezone: str):
+            self.timezone = timezone
+            self.jobs = []
+            self.started = False
+            self.shutdown_called = False
+
+        def add_job(self, func, trigger):
+            self.jobs.append(trigger)
+
+        def start(self):
+            self.started = True
+
+        def shutdown(self, wait: bool = False):
+            self.shutdown_called = True
+
+    monkeypatch.setattr(db_module, "init_pool", _noop)
+    monkeypatch.setattr(db_module, "close_pool", _noop)
+    monkeypatch.setattr(main_module, "AsyncIOScheduler", FakeScheduler)
+
+    from starlette.testclient import TestClient
+
+    app = main_module.create_app()
+    with TestClient(app):
+        scheduler = app.state.scheduler
+        assert scheduler is not None
+        assert scheduler.started is True
+        assert scheduler.timezone == "UTC"
+
+        scheduled_times = sorted((trigger.fields[5].expressions[0].first, trigger.fields[6].expressions[0].first) for trigger in scheduler.jobs)
+        assert scheduled_times == [(4, 0), (4, 15), (4, 30)]
+
+    assert scheduler.shutdown_called is True

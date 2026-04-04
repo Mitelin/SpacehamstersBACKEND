@@ -64,11 +64,25 @@ def create_app() -> Starlette:
                 except Exception as exc:
                     log(3, f"cron() wallet.sync Error: {exc}")
 
+            async def _wallet_transactions_sync() -> None:
+                try:
+                    log(2, "cron() walletTransactions.sync")
+                    access_token = await user_info.get_ceo_access_token()
+                    cnt = await wallet_transactions_service.sync(
+                        settings.corporation_id,
+                        settings.industry_wallet,
+                        access_token,
+                    )
+                    log(1, f"Records synchronized: {cnt}")
+                except Exception as exc:
+                    log(3, f"cron() walletTransactions.sync Error: {exc}")
+
             def _run(coro):
                 asyncio.create_task(coro())
 
             scheduler.add_job(lambda: _run(_jobs_sync), CronTrigger(hour=4, minute=0))
             scheduler.add_job(lambda: _run(_wallet_sync), CronTrigger(hour=4, minute=15))
+            scheduler.add_job(lambda: _run(_wallet_transactions_sync), CronTrigger(hour=4, minute=30))
             scheduler.start()
             app.state.scheduler = scheduler
 

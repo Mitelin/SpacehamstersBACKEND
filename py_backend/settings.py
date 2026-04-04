@@ -36,6 +36,7 @@ class Settings:
     # App
     corporation_id: int
     ceo_character_id: int
+    industry_wallet: int
     log_level: int
     enable_scheduler: int
 
@@ -81,6 +82,7 @@ def get_settings() -> Settings:
         eve_client_secret=_env("EVE_CLIENT_SECRET"),
         corporation_id=int(corporation_id),
         ceo_character_id=int(ceo_character_id),
+        industry_wallet=_env_int("INDUSTRY_WALLET", 6) or 6,
         log_level=_env_int("LOG_LEVEL", 2) or 2,
         enable_scheduler=_env_int("ENABLE_SCHEDULER", 0) or 0,
     )
