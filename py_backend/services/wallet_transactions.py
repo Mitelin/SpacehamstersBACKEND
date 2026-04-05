@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +11,8 @@ from ..logger import log
 
 
 def _jsonable_value(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return float(value)
     if isinstance(value, datetime):
         return value.isoformat(sep=" ")
     return value
