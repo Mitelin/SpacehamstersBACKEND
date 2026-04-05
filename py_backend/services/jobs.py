@@ -235,8 +235,8 @@ class JobsService:
             LEFT JOIN (SELECT sum(runs) as cnt, productTypeID FROM corpJobs WHERE completedDate >=  DATE(NOW() - INTERVAL 7 * 8 DAY) AND completedDate <  DATE(NOW() - INTERVAL 7 * 7 DAY) GROUP BY productTypeID) j8 on t.typeID = j8.productTypeID
             LEFT JOIN (SELECT sum(runs) as cnt, productTypeID FROM corpJobs WHERE completedDate >=  DATE(NOW() - INTERVAL 7 * 9 DAY) AND completedDate <  DATE(NOW() - INTERVAL 7 * 8 DAY) GROUP BY productTypeID) j9 on t.typeID = j9.productTypeID
             LEFT JOIN (SELECT sum(runs) as cnt, productTypeID FROM corpJobs WHERE completedDate >=  DATE(NOW() - INTERVAL 7 * 10 DAY) AND completedDate <  DATE(NOW() - INTERVAL 7 * 9 DAY) GROUP BY productTypeID) j10 on t.typeID = j10.productTypeID
-            where g.categoryID in ({category_placeholders})
-              and (j1.cnt is not null or j2.cnt is not null or j3.cnt is not null or j4.cnt is not null or j5.cnt is not null
+                        where g.categoryID in ({category_placeholders})
+                            and (j0.cnt is not null or j1.cnt is not null or j2.cnt is not null or j3.cnt is not null or j4.cnt is not null or j5.cnt is not null
                    or j6.cnt is not null or j7.cnt is not null or j8.cnt is not null or j9.cnt is not null or j10.cnt is not null)
             order by t.typeName
             """,

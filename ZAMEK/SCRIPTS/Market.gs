@@ -321,6 +321,59 @@ const Market = (()=>{
     });
     return out;
   };
+  const getMapsByType_ = (rows) => {
+    const byName = new Map();
+    const byId = new Map();
+    (rows || []).forEach(row => {
+      if (!row) return;
+
+      const typeName = normalizeDoctrineName_(row.typeName);
+      const typeId = Number(
+        row.typeID ??
+        row.typeId ??
+        row.productTypeID ??
+        row.productTypeId ??
+        row.id
+      );
+
+      if (typeName) byName.set(typeName, row);
+      if (isFinite(typeId) && typeId > 0) byId.set(typeId, row);
+    });
+    return { byName: byName, byId: byId };
+  };
+  const resolveTypeIdByName_ = (() => {
+    const memo = new Map();
+    return (typeName) => {
+      const normalizedName = normalizeDoctrineName_(typeName);
+      if (!normalizedName) return null;
+      if (memo.has(normalizedName)) return memo.get(normalizedName);
+
+      let typeId = null;
+      try {
+        const type = Universe.searchType(normalizedName);
+        const rawTypeId = Number(type && (type.type_id ?? type.typeID ?? type.id));
+        if (isFinite(rawTypeId) && rawTypeId > 0) typeId = rawTypeId;
+      } catch (e) {
+        typeId = null;
+      }
+
+      memo.set(normalizedName, typeId);
+      return typeId;
+    };
+  })();
+  const getRowByType_ = (maps, typeName) => {
+    if (!maps) return null;
+
+    const normalizedName = normalizeDoctrineName_(typeName);
+    const typeId = resolveTypeIdByName_(normalizedName);
+    if (isFinite(typeId) && maps.byId && maps.byId.has(typeId)) {
+      return maps.byId.get(typeId);
+    }
+    if (maps.byName && maps.byName.has(normalizedName)) {
+      return maps.byName.get(normalizedName);
+    }
+    return null;
+  };
   const getConfidenceLevel_ = (sales) => {
     const sold30d = toFiniteNumber_(sales && sales.sold30d, 0);
     const sold90d = toFiniteNumber_(sales && sales.sold90d, 0);
@@ -1012,8 +1065,8 @@ const Market = (()=>{
 
       const items = t2marketSheet.getRange(3, 1, dataRows, buildCostCol).getValues();
       const listedByType = getMarketListedByType_();
-      const salesByType = getMapByTypeName_(Aubi.getSalesVelocity());
-      const jobsByType = getMapByTypeName_(Aubi.getIndustryVelocity([6, 7]));
+      const salesByType = getMapsByType_(Aubi.getSalesVelocity());
+      const jobsByType = getMapsByType_(Aubi.getIndustryVelocity([6, 7]));
       const stateByType = loadT2AdjustmentState_();
       const rowsOut = [];
 
@@ -1033,8 +1086,8 @@ const Market = (()=>{
         const result = evaluateT2Adjustment_({
           now: now,
           state: state,
-          sales: salesByType.get(typeName),
-          jobs: jobsByType.get(typeName),
+          sales: getRowByType_(salesByType, typeName),
+          jobs: getRowByType_(jobsByType, typeName),
           listedNow: listedByType.get(typeName) || 0,
           baseTarget: baseTarget
         });
@@ -1139,6 +1192,7 @@ const Market = (()=>{
 
 function runCalculateT2Market() {
   Market.calculateT2Market();
+  Market.updateT2MarketAdjustments();
 }
 
 function runUpdateBufferPrivateMarketOrders() {

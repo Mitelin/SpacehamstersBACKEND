@@ -15,6 +15,7 @@ async def test_jobs_velocity_uses_category_placeholders(monkeypatch: pytest.Monk
 
     async def fake_fetch_all(sql: str, params: list) -> list[dict]:
         assert "where g.categoryID in (%s, %s)" in sql
+        assert "j0.cnt is not null" in sql
         assert params == [6, 7]
         return [{"typeName": "Test Item", "w1": Decimal("1.5")}] 
 
