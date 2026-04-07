@@ -18,6 +18,7 @@ const Blueprints = (()=>{
   const rowLock = 8    // radka zamku
 
   const _TRACE = PropertiesService.getScriptProperties().getProperty('DEBUG_TRACE') === '1';
+  let preparedCopyingReservationsMemo = null;
   const trace = (...args) => {
     if (!_TRACE) return;
     // eslint-disable-next-line no-console
@@ -247,6 +248,120 @@ const Blueprints = (()=>{
         6: researchBufferHangars,
       }
     };
+  };
+
+  const buildPreparedCopyingReservationsForRows = function(rows) {
+    const reservations = new Map();
+
+    if (!rows || rows.length === 0) return reservations;
+
+    rows.forEach(row => {
+      if (!row || row[3] !== 'Copying' || row[10] !== 'Připraveno') return;
+      const blueprintKey = normalizeIndustryKeyPart(row[1]);
+      if (!blueprintKey) return;
+      reservations.set(blueprintKey, (reservations.get(blueprintKey) || 0) + 1);
+    });
+
+    return reservations;
+  };
+
+  const cloneQuantityMap = function(map) {
+    const cloned = new Map();
+    if (!map) return cloned;
+    map.forEach((value, key) => {
+      cloned.set(key, Number(value) || 0);
+    });
+    return cloned;
+  };
+
+  const subtractReservations = function(target, reservations) {
+    if (!target || !reservations) return target;
+
+    reservations.forEach((reservedCount, blueprintKey) => {
+      if (!blueprintKey || !reservedCount) return;
+      target.set(
+        blueprintKey,
+        Math.max(0, (target.get(blueprintKey) || 0) - reservedCount)
+      );
+    });
+
+    return target;
+  };
+
+  const rebuildPreparedCopyingReservationsMemo = function() {
+    const spreadsheet = SpreadsheetApp.getActive();
+    const bySheetId = new Map();
+    const total = new Map();
+
+    spreadsheet.getSheets().forEach(projectSheet => {
+      if (!projectSheet || !projectSheet.getName().startsWith('Projekt ')) return;
+
+      const firstValue = projectSheet.getRange(firstDataRow, 1, 1, 1).getValue();
+      if (!firstValue) {
+        bySheetId.set(String(projectSheet.getSheetId()), new Map());
+        return;
+      }
+
+      const lastDataRow = projectSheet.getRange(firstDataRow, 1, 1, 1)
+        .getNextDataCell(SpreadsheetApp.Direction.DOWN)
+        .getRow();
+      const rowCount = Math.min(maxJobs, Math.max(0, lastDataRow - firstDataRow + 1));
+      if (rowCount <= 0) {
+        bySheetId.set(String(projectSheet.getSheetId()), new Map());
+        return;
+      }
+
+      const rows = projectSheet.getRange(firstDataRow, 1, rowCount, 11).getValues();
+      const sheetReservations = buildPreparedCopyingReservationsForRows(rows);
+      bySheetId.set(String(projectSheet.getSheetId()), sheetReservations);
+      sheetReservations.forEach((reservedCount, blueprintKey) => {
+        total.set(blueprintKey, (total.get(blueprintKey) || 0) + reservedCount);
+      });
+    });
+
+    preparedCopyingReservationsMemo = {
+      bySheetId: bySheetId,
+      total: total,
+    };
+
+    return preparedCopyingReservationsMemo;
+  };
+
+  const collectPreparedCopyingReservations = function(currentSheet) {
+    const memo = preparedCopyingReservationsMemo || rebuildPreparedCopyingReservationsMemo();
+    const reservations = cloneQuantityMap(memo.total);
+    const currentSheetId = currentSheet && currentSheet.getSheetId ? String(currentSheet.getSheetId()) : '';
+    if (currentSheetId && memo.bySheetId.has(currentSheetId)) {
+      subtractReservations(reservations, memo.bySheetId.get(currentSheetId));
+    }
+    return reservations;
+  };
+
+  const updatePreparedCopyingReservationsMemo = function(sheet, rows, statusValues) {
+    if (!sheet) return;
+
+    const currentSheetId = sheet.getSheetId ? String(sheet.getSheetId()) : '';
+    if (!currentSheetId) return;
+
+    const memo = preparedCopyingReservationsMemo || rebuildPreparedCopyingReservationsMemo();
+    const preparedRows = (rows || []).map((row, index) => {
+      const status = statusValues && statusValues[index] ? statusValues[index][0] : row[10];
+      const out = row ? row.slice(0, 11) : [];
+      out[10] = status;
+      return out;
+    });
+    const nextReservations = buildPreparedCopyingReservationsForRows(preparedRows);
+    const previousReservations = memo.bySheetId.get(currentSheetId);
+
+    if (previousReservations) subtractReservations(memo.total, previousReservations);
+    nextReservations.forEach((reservedCount, blueprintKey) => {
+      memo.total.set(blueprintKey, (memo.total.get(blueprintKey) || 0) + reservedCount);
+    });
+    memo.bySheetId.set(currentSheetId, nextReservations);
+  };
+
+  const resetPreparedCopyingReservationsMemo = function() {
+    preparedCopyingReservationsMemo = null;
   };
 
   const toIntOrDefault = function(value, fallback) {
@@ -1103,12 +1218,41 @@ const Blueprints = (()=>{
       let deliveredReadyByProduct;
       let deliveredReadyByBucket;
       let availableBlueprintRunsByName;
+      let availableBposByBlueprint;
       _time(_sheetName + ' recalc load corp context', () => {
         bpos = Corporation.loadBPOs();                // load BPOs from cache
         const assetSnapshot = Corporation.getAssetsCached(hangarContext.hangars);
         const blueprintSnapshot = Corporation.getBlueprintsCached(hangarContext.hangars);
         allJobs = Corporation.getJobsCached(hangarContext.hangars, true);
         allRunningJobs = allJobs.data.filter(item => item.status == 'active');   // filter only running jobs
+
+        availableBposByBlueprint = new Map();
+        bpos.forEach(item => {
+          const blueprintKey = normalizeIndustryKeyPart(item && item.blueprint);
+          if (!blueprintKey) return;
+          availableBposByBlueprint.set(blueprintKey, (availableBposByBlueprint.get(blueprintKey) || 0) + 1);
+        });
+        const activeBpoReservations = new Set();
+        allRunningJobs.forEach(item => {
+          if (item.blueprintId == null) return;
+          activeBpoReservations.add(String(item.blueprintId));
+        });
+        bpos.forEach(item => {
+          const blueprintKey = normalizeIndustryKeyPart(item && item.blueprint);
+          if (!blueprintKey || !activeBpoReservations.has(String(item.blueprintId))) return;
+          availableBposByBlueprint.set(
+            blueprintKey,
+            Math.max(0, (availableBposByBlueprint.get(blueprintKey) || 0) - 1)
+          );
+        });
+        const preparedCopyingReservations = collectPreparedCopyingReservations(sheet);
+        preparedCopyingReservations.forEach((reservedCount, blueprintKey) => {
+          if (!blueprintKey || !reservedCount) return;
+          availableBposByBlueprint.set(
+            blueprintKey,
+            Math.max(0, (availableBposByBlueprint.get(blueprintKey) || 0) - reservedCount)
+          );
+        });
 
         const deliveredJobs = allJobs.data.filter(item => (
           item.status == 'delivered' && item.completedTime > assetSnapshot.lastModified
@@ -1257,21 +1401,11 @@ const Blueprints = (()=>{
 
           // BPO must be available for copy job
           if (action == "Copying" && canStart) {
-            // find BPO
-            let jobBPOs = bpos.filter(item => item.blueprint == blueprint);
-            trace(jobBPOs);
+            const blueprintKey = normalizeIndustryKeyPart(blueprint);
+            const freeBpoCount = blueprintKey ? (Number(availableBposByBlueprint.get(blueprintKey)) || 0) : 0;
+            trace('Copying BPO availability', blueprint, freeBpoCount);
 
-            // find running job for every BPO
-            let jobBPOsRunning = jobBPOs.map(a => ({
-              itemId : a.blueprintId,
-              job: allRunningJobs.find(item => item.blueprintId == a.blueprintId)
-            }));
-            trace(jobBPOsRunning)
-
-            let jobFreeBPOs = jobBPOsRunning.filter(item => item.job == null);
-            trace(jobFreeBPOs);
-
-            if (jobFreeBPOs.length == 0) {
+            if (freeBpoCount <= 0) {
               canStart = false;
               log = log + "\n- Není volné BPO!";
             }
@@ -1280,6 +1414,15 @@ const Blueprints = (()=>{
 
           if (canStart) {
             statusValues[row][0] = 'Připraveno';
+            if (action == 'Copying') {
+              const blueprintKey = normalizeIndustryKeyPart(blueprint);
+              if (blueprintKey) {
+                availableBposByBlueprint.set(
+                  blueprintKey,
+                  Math.max(0, (Number(availableBposByBlueprint.get(blueprintKey)) || 0) - 1)
+                );
+              }
+            }
           } else {
             statusValues[row][0] = 'Čeká';
             runCostNoteValues[row][0] = log;
@@ -1337,6 +1480,7 @@ const Blueprints = (()=>{
           sheet.getRange(firstDataRow, colRunCost + 1, plannedCount, 1).setValues(runCostNoteValues);
         }
       });
+      updatePreparedCopyingReservationsMemo(sheet, refreshedPlannedJobs, statusValues);
 
 
       // show result in notification window
@@ -2448,6 +2592,10 @@ const Blueprints = (()=>{
       }
     },
 
+    resetPreparedCopyingReservationsMemo: function() {
+      resetPreparedCopyingReservationsMemo();
+    },
+
 
   }
 })()
@@ -2508,6 +2656,9 @@ function runUpdateAllProjects() {
   // Ensure per-execution caches start clean (Apps Script runtime may be warm).
   if (typeof Corporation !== 'undefined' && Corporation.resetMemo) {
     Corporation.resetMemo();
+  }
+  if (typeof Blueprints !== 'undefined' && Blueprints.resetPreparedCopyingReservationsMemo) {
+    Blueprints.resetPreparedCopyingReservationsMemo();
   }
   /*
   var sheet = SpreadsheetApp.getActive().getSheetByName('Projekt ALPRO 1')

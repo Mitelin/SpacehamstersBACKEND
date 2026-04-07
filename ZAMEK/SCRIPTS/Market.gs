@@ -1200,6 +1200,8 @@ function runUpdateBufferPrivateMarketOrders() {
 }
 
 function runUpdateMarketOrders() {
+  Aubi.syncWalletTransactions({ silent: true });
+  Aubi.syncIndustryJobs({ silent: true });
   Market.updateMarketOrders();
   Market.updateT2MarketAdjustments();
 }

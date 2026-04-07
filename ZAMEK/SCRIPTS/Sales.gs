@@ -1,7 +1,7 @@
 /*
  * Jita Sales helper
  *
- * Goal: one click -> generate list of sell orders limited by free market order slots,
+ * Goal: one click -> generate list of sell orders limited only by a hard export cap,
  * based on a user-provided list of item names + quantities.
  *
  * Input:
@@ -22,7 +22,8 @@ const Sales = (()=>{
   const JANICE_API_BASE = 'https://janice.e-351.com';
   const JANICE_MARKET_ID_JITA = 2; // Janice default market is 2 (Jita 4-4)
   const DEFAULT_PRICE_MULTIPLIER = 1.0;
-  const LIVE_VERIFY_CANDIDATES = 100; // prefer live Jita for all consumed rows (free-slot cap)
+  const MAX_EXPORT_LINES = 100;
+  const LIVE_VERIFY_CANDIDATES = MAX_EXPORT_LINES; // prefer live Jita for all consumed rows in the hard export cap
   const LIVE_VERIFY_MAX_RATIO = 1.05; // override stale cache when off by >5%
   const LIVE_ORDER_TARGET_SHARE = 0.05; // 5% of visible sell-side volume
 
@@ -34,12 +35,6 @@ const Sales = (()=>{
   const COL_TOTAL = 5;   // E (computed)
   const COL_NOTE = 6;    // F (computed)
   const COL_MANUAL = 7;  // G (user input fallback unit price)
-
-  // Skill IDs for market order slots
-  const SKILL_TRADE = 3443;
-  const SKILL_RETAIL = 3444;
-  const SKILL_WHOLESALE = 16595;
-  const SKILL_TYCOON = 18580;
 
   const toInt = (v) => {
     const n = Number(v);
@@ -211,6 +206,25 @@ const Sales = (()=>{
     }
   };
 
+  const resolveInventoryTypesChunk_ = (names) => {
+    const chunk = Array.isArray(names) ? names.filter(Boolean) : [];
+    if (!chunk.length) return [];
+
+    const maxAttempts = 4;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return Eve.resolveNames(chunk, 'inventory_types') || [];
+      } catch (e) {
+        const message = String(e || '');
+        const retryable = /\b(420|5\d\d)\b/.test(message) || /rate limit exceeded/i.test(message);
+        if (!retryable || attempt >= maxAttempts) break;
+        Utilities.sleep(250 * attempt);
+      }
+    }
+
+    return [];
+  };
+
   const resolveTypeIdsByNames_ = (names) => {
     // Returns: Map canonicalKey -> {typeId, resolvedName}
     const out = new Map();
@@ -262,10 +276,10 @@ const Sales = (()=>{
       if (trimmedNoCount && trimmedNoCount !== trimmed) addReq_(normalizeEsiRequestNameExact_(trimmedNoCount));
     }
 
-    const CHUNK = 200;
+    const CHUNK = 50;
     for (let i = 0; i < unique.length; i += CHUNK) {
       const chunk = unique.slice(i, i + CHUNK);
-      const data = Eve.resolveNames(chunk, 'inventory_types') || [];
+      const data = resolveInventoryTypesChunk_(chunk);
       for (let j = 0; j < data.length; j++) {
         const ent = data[j];
         const name = normalizeEsiTypeName_(ent && ent.name);
@@ -661,28 +675,6 @@ const Sales = (()=>{
     }
   };
 
-  const resolveCharacterIdByName = (name) => {
-    name = String(name || '').trim();
-    if (!name) return '';
-    const matches = Eve.resolveNames([name], 'characters');
-    if (matches && matches.length) return String(matches[0].id);
-    return '';
-  };
-
-  const computeMaxOrderSlots = (skillsJson) => {
-    const skills = (skillsJson && skillsJson.skills) ? skillsJson.skills : [];
-    const byId = new Map(skills.map(s => [String(s.skill_id), toInt(s.active_skill_level)]));
-
-    const trade = toInt(byId.get(String(SKILL_TRADE)));
-    const retail = toInt(byId.get(String(SKILL_RETAIL)));
-    const wholesale = toInt(byId.get(String(SKILL_WHOLESALE)));
-    const tycoon = toInt(byId.get(String(SKILL_TYCOON)));
-
-    // EVE personal market order slots formula:
-    // base 5 + 4*Trade + 8*Retail + 16*Wholesale + 32*Tycoon
-    return 5 + 4 * trade + 8 * retail + 16 * wholesale + 32 * tycoon;
-  };
-
   const chooseUnitPrice = (priceObj) => {
     if (!priceObj) return NaN;
     const order = ['jitaSellWavg', 'jitaSellTop5', 'jitaSellAvg', 'jitaSplitTop5'];
@@ -922,46 +914,14 @@ const Sales = (()=>{
 
       try {
         const sheet = getSalesSheet();
-        // If user provided character name in B1, switch active character.
         const selectedName = getSelectedCharacterName(sheet);
-        if (selectedName) {
-          const cid = resolveCharacterIdByName(selectedName);
-          if (!cid) throw ('Character nenalezen: ' + selectedName);
-          Personal.setActiveCharacter(cid, 'sales');
-        }
-
-        // Ensure we have a valid token early
-        const token = Personal.getAccessToken('sales');
-        if (!token) throw ('Nejsi přihlášen pro Sales. Otevři EVE Data → Login a klikni „Sales login“ (minimální scopes).');
-
-        const characterId = Personal.getId('sales');
-        let characterName = '';
-        try {
-          characterName = Personal.getName ? Personal.getName('sales') : '';
-        } catch (e) {}
-
-        // A) free market order slots
-        const ordersRes = Eve.getCharacterMarketOrders(characterId, 'sales');
-        const openOrders = ordersRes && ordersRes.data ? ordersRes.data : [];
-        const openOrderCount = openOrders.length;
-
-        const skillsJson = Eve.getCharacterSkills(characterId, 'sales');
-        const maxSlots = computeMaxOrderSlots(skillsJson);
-        const freeSlotsRaw = Math.max(0, maxSlots - openOrderCount);
-        // EVE hard cap for personal market orders is 100.
-        const MAX_EXPORT_LINES = 100;
-        const freeSlots = Math.min(freeSlotsRaw, MAX_EXPORT_LINES);
-
-        if (freeSlots <= 0) {
-          SpreadsheetApp.getUi().alert('Jita Sales', 'Nemáš volné market order sloty (max=' + maxSlots + ', open=' + openOrderCount + ').', SpreadsheetApp.getUi().ButtonSet.OK);
-          return;
-        }
+        const freeSlots = MAX_EXPORT_LINES;
 
         writeSheet(sheet, {
-          characterId,
-          characterName,
-          maxSlots,
-          openOrders: openOrderCount,
+          characterId: '',
+          characterName: selectedName,
+          maxSlots: MAX_EXPORT_LINES,
+          openOrders: '',
           freeSlots
         }, '');
 
@@ -1068,7 +1028,7 @@ const Sales = (()=>{
         let missingPrice = 0;
         let skippedQty = 0;
         const exportLines = [];
-        const exportCandidatesLen = Math.min(freeSlots, inputRows.length);
+        const exportCandidatesLen = Math.min(MAX_EXPORT_LINES, inputRows.length);
         let missingTypeCand = 0;
         let missingPriceCand = 0;
         let noMarketCand = 0;
@@ -1243,7 +1203,7 @@ const Sales = (()=>{
 
           // IMPORTANT: no sorting. Export follows manual order from B5 downward.
           // Rules:
-          // - we consider ONLY the first `freeSlots` rows (by position)
+          // - we consider ONLY the first `MAX_EXPORT_LINES` rows (by position)
           // - if qty is missing, we skip export for that row BUT it still consumes a slot
           // - we never pull replacements from rows below
           if (!r.qtyOk) {
@@ -1288,13 +1248,13 @@ const Sales = (()=>{
         } catch (e) {}
 
         if (!candidateBlocking && exportLines.length) {
-          showClipboardDialog(exportText, exportCandidatesLen, freeSlots, inputRows.length);
+          showClipboardDialog(exportText, exportCandidatesLen, MAX_EXPORT_LINES, inputRows.length);
         } else {
           SpreadsheetApp.getUi().alert(
             'Jita Sales',
             candidateBlocking
               ? ((janiceApiKey ? '' : 'Pozn.: JANICE_API_KEY není nastavený (Sales pak nepoužije Janice API).\n')
-                + 'V prvních ' + exportCandidatesLen + ' řádcích (dle freeSlots) chybí type/cena: type?=' + missingTypeCand + ', no price=' + missingPriceCand + '.\n'
+                + 'V prvních ' + exportCandidatesLen + ' řádcích (dle limitu ' + MAX_EXPORT_LINES + ') chybí type/cena: type?=' + missingTypeCand + ', no price=' + missingPriceCand + '.\n'
                 + (missingTypeCandRows.length ? ('Type? řádky: ' + missingTypeCandRows.join(' | ') + '\n') : '')
                 + (missingPriceCandRows.length ? ('No price řádky: ' + missingPriceCandRows.join(' | ') + '\n') : '')
                 + 'Oprav názvy/ceny v těch prvních řádcích (sloupec F) a spusť znovu.')

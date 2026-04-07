@@ -173,3 +173,67 @@ def test_recently_delivered_jobs_are_projected_into_stock_not_running() -> None:
         r"startDate:\s*a\.start_date,[\s\S]*?endDate:\s*a\.end_date,[\s\S]*?completedDate:\s*a\.completed_date,[\s\S]*?startTime:\s*new Date\(a\.start_date\)\.getTime\(\),[\s\S]*?endTime:\s*new Date\(a\.end_date\)\.getTime\(\),[\s\S]*?completedTime:\s*new Date\(a\.completed_date\)\.getTime\(\)",
         corporation_text,
     ), "Freshly synced jobs must preserve parsed start/end/completed timestamps in memo, or delivered-job reconciliation breaks until the sheet is reloaded."
+
+
+def test_copying_status_reserves_free_bpo_capacity() -> None:
+    blueprints_text = _read_text(BLUEPRINTS_GS)
+
+    assert re.search(
+        r"availableBposByBlueprint\s*=\s*new Map\(\)[\s\S]*?bpos\.forEach\(item\s*=>\s*\{[\s\S]*?availableBposByBlueprint\.set\(",
+        blueprints_text,
+    ), "Copying status recalc must build a free-BPO counter from Corporation.loadBPOs() by blueprint name."
+
+    assert re.search(
+        r"allRunningJobs\.forEach\(item\s*=>\s*\{[\s\S]*?activeBpoReservations\.add\(String\(item\.blueprintId\)\)",
+        blueprints_text,
+    ), "Free BPO count must be reduced by blueprints already occupied in running jobs."
+
+    assert re.search(
+        r"if\s*\(action\s*==\s*\"Copying\"\s*&&\s*canStart\)\s*\{[\s\S]*?availableBposByBlueprint\.get\(blueprintKey\)[\s\S]*?freeBpoCount\s*<=\s*0[\s\S]*?Není volné BPO!",
+        blueprints_text,
+    ), "Copying rows must flip to Čeká when no free BPO remains for the blueprint."
+
+    assert re.search(
+        r"if\s*\(canStart\)\s*\{[\s\S]*?statusValues\[row\]\[0\]\s*=\s*'Připraveno';[\s\S]*?if\s*\(action\s*==\s*'Copying'\)\s*\{[\s\S]*?availableBposByBlueprint\.set\(",
+        blueprints_text,
+    ), "Earlier Copying rows marked Připraveno must reserve one free BPO so later rows for the same blueprint fall back to Čeká."
+
+    assert re.search(
+        r"const\s+collectPreparedCopyingReservations\s*=\s*function\(currentSheet\)",
+        blueprints_text,
+    ), "Project recalc must expose a helper that inspects prepared Copying reservations in other project sheets."
+
+    assert re.search(
+        r"const\s+buildPreparedCopyingReservationsForRows\s*=\s*function\(rows\)[\s\S]*?row\[3\]\s*!==\s*'Copying'\s*\|\|\s*row\[10\]\s*!==\s*'Připraveno'",
+        blueprints_text,
+    ), "Cross-project BPO reservation must only consume capacity from rows that already mark the Copying job as Připraveno."
+
+    assert re.search(
+        r"const\s+preparedCopyingReservations\s*=\s*collectPreparedCopyingReservations\(sheet\)[\s\S]*?preparedCopyingReservations\.forEach\(\(reservedCount,\s*blueprintKey\)\s*=>\s*\{[\s\S]*?availableBposByBlueprint\.set\(",
+        blueprints_text,
+    ), "Before computing current-sheet Copying readiness, recalc must subtract prepared reservations found in other project sheets."
+
+    assert re.search(
+        r"let\s+preparedCopyingReservationsMemo\s*=\s*null;[\s\S]*?const\s+rebuildPreparedCopyingReservationsMemo\s*=\s*function\(\)",
+        blueprints_text,
+    ), "Cross-project Copying reservation scan should be memoized for the current Apps Script execution."
+
+    assert re.search(
+        r"preparedCopyingReservationsMemo\s*\|\|\s*rebuildPreparedCopyingReservationsMemo\(\)",
+        blueprints_text,
+    ), "Reservation lookup should reuse the prepared Copying memo instead of rescanning all project sheets every recalc."
+
+    assert re.search(
+        r"updatePreparedCopyingReservationsMemo\(sheet,\s*refreshedPlannedJobs,\s*statusValues\)",
+        blueprints_text,
+    ), "After writing statuses, recalc must refresh the memoized Copying reservations for the current sheet."
+
+    assert re.search(
+        r"resetPreparedCopyingReservationsMemo:\s*function\(\)\s*\{[\s\S]*?resetPreparedCopyingReservationsMemo\(\);",
+        blueprints_text,
+    ), "Blueprints API must expose a reset hook for the prepared Copying reservation memo."
+
+    assert re.search(
+        r"if\s*\(typeof\s+Blueprints\s*!==\s*'undefined'\s*&&\s*Blueprints\.resetPreparedCopyingReservationsMemo\)\s*\{[\s\S]*?Blueprints\.resetPreparedCopyingReservationsMemo\(\);",
+        blueprints_text,
+    ), "runUpdateAllProjects() must clear the prepared Copying reservation memo before a batch refresh starts."
