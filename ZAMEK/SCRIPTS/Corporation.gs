@@ -424,11 +424,42 @@ const Corporation = (()=>{
         return true;
       };
 
+      const syncMainMappingRows = function(report) {
+        if (!report || report.length <= 0) return;
+
+        const currentLastRow = jobHistorySheet.getLastRow();
+        const existingNames = currentLastRow > 1
+          ? jobHistorySheet.getRange(2, 1, currentLastRow - 1, 2).getValues()
+              .map(row => String(row[0] || '').trim())
+              .filter(Boolean)
+          : [];
+        const knownNames = new Set(existingNames);
+        const missingRows = [];
+
+        report.forEach(item => {
+          const installerName = String(item && item.installerName || '').trim();
+          if (!installerName || knownNames.has(installerName)) return;
+          knownNames.add(installerName);
+          missingRows.push([installerName, '']);
+        });
+
+        if (missingRows.length <= 0) return;
+
+        jobHistorySheet
+          .getRange(currentLastRow + 1, 1, missingRows.length, 2)
+          .setValues(missingRows);
+
+        if (Universe.resetMainMapCache) {
+          Universe.resetMainMapCache();
+        }
+      };
+
       const toHistoryRows = function(report) {
         return report.map(a => [a.installerName, a.copying, a.invention, a.manufacturing, a.reaction, a.researchME, a.researchTE, a.total]);
       };
 
       let report = this.getJobsReport(year, month);
+      syncMainMappingRows(report);
       var rows = toHistoryRows(report);
       if (writeReportRows(rows)) return;
 
@@ -439,6 +470,7 @@ const Corporation = (()=>{
         try {
           Aubi.syncIndustryJobs({ silent: true });
           report = this.getJobsReport(year, month);
+          syncMainMappingRows(report);
           rows = toHistoryRows(report);
           if (writeReportRows(rows)) {
             SpreadsheetApp.getActive().toast('Historie: data byla po synchronizaci načtena.', 'Historie', 5);

@@ -141,6 +141,28 @@ const Blueprints = (()=>{
     return Number(map.get(key)) || 0;
   };
 
+  const adjustBlueprintAliasQuantity = function(map, blueprintName, delta) {
+    if (!map || !delta) return map;
+
+    buildBlueprintNameAliases(blueprintName).forEach(alias => {
+      map.set(alias, Math.max(0, (Number(map.get(alias)) || 0) + delta));
+    });
+
+    return map;
+  };
+
+  const getBlueprintAliasQuantity = function(map, blueprintName) {
+    if (!map) return 0;
+
+    const aliases = buildBlueprintNameAliases(blueprintName);
+    for (let i = 0; i < aliases.length; i++) {
+      const quantity = Number(map.get(aliases[i])) || 0;
+      if (quantity > 0) return quantity;
+    }
+
+    return 0;
+  };
+
   const resolvePreferredProductRow = function(rowsByProductKey, rows, productName) {
     const key = normalizeIndustryKeyPart(productName);
     if (!key || !rowsByProductKey) return -1;
@@ -203,6 +225,7 @@ const Blueprints = (()=>{
     const hangars = [];
     const manufacturingHangars = [];
     const researchBufferHangars = [];
+    const blueprintAccessHangars = [];
 
     const pushHangar = function(target, hangar) {
       if (!hangar) return;
@@ -212,12 +235,16 @@ const Blueprints = (()=>{
 
     pushHangar(manufacturingHangars, Corporation.getHangarByName('Manufactoring', manufacturingHangar));
     pushHangar(manufacturingHangars, Corporation.getHangarByName('Capital', capitalHangar));
+    manufacturingHangars.forEach(hangar => blueprintAccessHangars.push(hangar));
 
     const reactionHangarObj = Corporation.getHangarByName('Reaction', reactionHangar);
     if (reactionHangarObj) hangars.push(reactionHangarObj);
 
     const researchHangarObj = Corporation.getHangarByName('Research', researchHangar);
-    if (researchHangarObj) hangars.push(researchHangarObj);
+    if (researchHangarObj) {
+      hangars.push(researchHangarObj);
+      blueprintAccessHangars.push(researchHangarObj);
+    }
 
     let manufacturingBufferHangar = null;
     let reactionBufferHangar = null;
@@ -246,7 +273,57 @@ const Blueprints = (()=>{
         4: reactionHangarObj ? [reactionHangarObj] : [],
         5: researchHangarObj ? [researchHangarObj] : [],
         6: researchBufferHangars,
+      },
+      blueprintAccessHangars: blueprintAccessHangars,
+    };
+  };
+
+  const blueprintMatchesHangar = function(item, hangar) {
+    if (!item || !hangar) return false;
+
+    if (item.locationId == hangar.locationID) {
+      if (hangar.locationType != 'station') return true;
+      if (!hangar.locationFlag) return true;
+      return item.locationFlag == hangar.locationFlag;
+    }
+
+    if (hangar.locationType == 'station' && hangar.locationFlag) {
+      return item.locationFlag == hangar.locationFlag;
+    }
+
+    return false;
+  };
+
+  const getSourceHangarsForAction = function(action, useBufferHangars, isAdvanced) {
+    let sourceHangar = 0;
+    let sourceHangarAlt = 0;
+
+    if (action == 'Manufacturing') {
+      if (useBufferHangars && !isAdvanced) {
+        sourceHangar = 1;
+        sourceHangarAlt = 2;
+      } else {
+        sourceHangar = 2;
       }
+    }
+
+    if (action == 'Reaction') {
+      if (useBufferHangars && !isAdvanced) sourceHangar = 3;
+      else sourceHangar = 4;
+    }
+
+    if (action == 'Copying') {
+      if (useBufferHangars && !isAdvanced) sourceHangar = 5;
+      else sourceHangar = 6;
+    }
+
+    if (action == 'Invention') {
+      sourceHangar = 6;
+    }
+
+    return {
+      sourceHangar: sourceHangar,
+      sourceHangarAlt: sourceHangarAlt,
     };
   };
 
@@ -327,8 +404,15 @@ const Blueprints = (()=>{
     return preparedCopyingReservationsMemo;
   };
 
+  const getPreparedCopyingReservationsMemo = function() {
+    return {
+      bySheetId: new Map(),
+      total: new Map(),
+    };
+  };
+
   const collectPreparedCopyingReservations = function(currentSheet) {
-    const memo = preparedCopyingReservationsMemo || rebuildPreparedCopyingReservationsMemo();
+    const memo = getPreparedCopyingReservationsMemo();
     const reservations = cloneQuantityMap(memo.total);
     const currentSheetId = currentSheet && currentSheet.getSheetId ? String(currentSheet.getSheetId()) : '';
     if (currentSheetId && memo.bySheetId.has(currentSheetId)) {
@@ -338,26 +422,7 @@ const Blueprints = (()=>{
   };
 
   const updatePreparedCopyingReservationsMemo = function(sheet, rows, statusValues) {
-    if (!sheet) return;
-
-    const currentSheetId = sheet.getSheetId ? String(sheet.getSheetId()) : '';
-    if (!currentSheetId) return;
-
-    const memo = preparedCopyingReservationsMemo || rebuildPreparedCopyingReservationsMemo();
-    const preparedRows = (rows || []).map((row, index) => {
-      const status = statusValues && statusValues[index] ? statusValues[index][0] : row[10];
-      const out = row ? row.slice(0, 11) : [];
-      out[10] = status;
-      return out;
-    });
-    const nextReservations = buildPreparedCopyingReservationsForRows(preparedRows);
-    const previousReservations = memo.bySheetId.get(currentSheetId);
-
-    if (previousReservations) subtractReservations(memo.total, previousReservations);
-    nextReservations.forEach((reservedCount, blueprintKey) => {
-      memo.total.set(blueprintKey, (memo.total.get(blueprintKey) || 0) + reservedCount);
-    });
-    memo.bySheetId.set(currentSheetId, nextReservations);
+    return;
   };
 
   const resetPreparedCopyingReservationsMemo = function() {
@@ -994,6 +1059,15 @@ const Blueprints = (()=>{
         useBufferHangars
       );
 
+      if (typeof Corporation !== 'undefined' && (!Corporation.isMemoFrozen || !Corporation.isMemoFrozen())) {
+        if (Corporation.syncJobs) {
+          _time(_sheetName + ' recalc sync jobs cache', () => Corporation.syncJobs());
+        }
+        if (Corporation.syncBlueprints) {
+          _time(_sheetName + ' recalc sync blueprints cache', () => Corporation.syncBlueprints());
+        }
+      }
+
       // load prices
       _time(_sheetName + ' recalc load prices', () => priceList.init());
 
@@ -1113,14 +1187,21 @@ const Blueprints = (()=>{
             // find every material in job queue or input hangar
             materials.forEach(material => {
               trace("::: Material: " + material.type + " quantity: " + material.quantity);
+              const copyingUsesExternalOriginal = action == 'Copying' && isBlueprintLikeName(material.type);
+
+              if (copyingUsesExternalOriginal) {
+                trace("::: Copying original is checked via BPO availability, not project hangar stock", material.type);
+                return;
+              }
 
               let pos = resolvePreferredProductRow(plannedRowsByProductKey, plannedJobs, material.type);
               if (pos >= 0) {
                 // if job is found, increase job output amount
                 // recalculate required amount by batchsize
                 if (plannedJobs[pos][3] == "Copying") {
-                  // BPO Copy activity, calculate needed BPC runs as todo / BPC batch size
-                  plannedJobs[pos][12] += Math.ceil(todo / plannedJobs[pos][8]);
+                  // Copying subcomponents must scale with the parent material volume,
+                  // not only with the parent todo count.
+                  plannedJobs[pos][12] += Math.ceil(material.quantity * todo / total);
                   
                 } else if (plannedJobs[pos][3] == "Invention") {
                   // BPC Invention activity, calculate needed items and deduct running T2 BPCs from available BPCs
@@ -1214,44 +1295,58 @@ const Blueprints = (()=>{
       i = 0;
       let bpos;
       let allJobs;
+      let allCorpJobs;
       let allRunningJobs;
       let deliveredReadyByProduct;
       let deliveredReadyByBucket;
+      let availableBlueprintRunsForJobs;
+      let availableBlueprintRunsByBucket;
       let availableBlueprintRunsByName;
       let availableBposByBlueprint;
+      let totalBposByBlueprint;
+      let activeBpoReservationsByBlueprint;
+      let preparedBpoReservationsByBlueprint;
       _time(_sheetName + ' recalc load corp context', () => {
-        bpos = Corporation.loadBPOs();                // load BPOs from cache
         const assetSnapshot = Corporation.getAssetsCached(hangarContext.hangars);
         const blueprintSnapshot = Corporation.getBlueprintsCached(hangarContext.hangars);
+        const allBlueprintsSnapshot = Corporation.getBlueprintsCached();
+        bpos = (allBlueprintsSnapshot.data || [])
+          .filter(item => Number(item && item.runs) === -1)
+          .map(item => ({
+            blueprintId: item.itemId,
+            blueprint: item.typeName,
+          }));
         allJobs = Corporation.getJobsCached(hangarContext.hangars, true);
-        allRunningJobs = allJobs.data.filter(item => item.status == 'active');   // filter only running jobs
+        allCorpJobs = Corporation.getJobsCached(null, true);
+        allRunningJobs = allCorpJobs.data.filter(item => item.status == 'active');   // BPO occupancy is global across projects
 
         availableBposByBlueprint = new Map();
+        totalBposByBlueprint = new Map();
+        activeBpoReservationsByBlueprint = new Map();
+        preparedBpoReservationsByBlueprint = new Map();
         bpos.forEach(item => {
-          const blueprintKey = normalizeIndustryKeyPart(item && item.blueprint);
-          if (!blueprintKey) return;
-          availableBposByBlueprint.set(blueprintKey, (availableBposByBlueprint.get(blueprintKey) || 0) + 1);
+          adjustBlueprintAliasQuantity(availableBposByBlueprint, item && item.blueprint, 1);
+          adjustBlueprintAliasQuantity(totalBposByBlueprint, item && item.blueprint, 1);
         });
         const activeBpoReservations = new Set();
+        const activeBpoReservationBlueprints = [];
         allRunningJobs.forEach(item => {
           if (item.blueprintId == null) return;
           activeBpoReservations.add(String(item.blueprintId));
         });
         bpos.forEach(item => {
-          const blueprintKey = normalizeIndustryKeyPart(item && item.blueprint);
-          if (!blueprintKey || !activeBpoReservations.has(String(item.blueprintId))) return;
-          availableBposByBlueprint.set(
-            blueprintKey,
-            Math.max(0, (availableBposByBlueprint.get(blueprintKey) || 0) - 1)
-          );
+          if (!activeBpoReservations.has(String(item.blueprintId))) return;
+          adjustBlueprintAliasQuantity(availableBposByBlueprint, item && item.blueprint, -1);
+          activeBpoReservationBlueprints.push(item && item.blueprint);
+        });
+        activeBpoReservationBlueprints.forEach(blueprintName => {
+          adjustBlueprintAliasQuantity(activeBpoReservationsByBlueprint, blueprintName, 1);
         });
         const preparedCopyingReservations = collectPreparedCopyingReservations(sheet);
         preparedCopyingReservations.forEach((reservedCount, blueprintKey) => {
           if (!blueprintKey || !reservedCount) return;
-          availableBposByBlueprint.set(
-            blueprintKey,
-            Math.max(0, (availableBposByBlueprint.get(blueprintKey) || 0) - reservedCount)
-          );
+          adjustBlueprintAliasQuantity(availableBposByBlueprint, blueprintKey, -reservedCount);
+          adjustBlueprintAliasQuantity(preparedBpoReservationsByBlueprint, blueprintKey, reservedCount);
         });
 
         const deliveredJobs = allJobs.data.filter(item => (
@@ -1288,11 +1383,23 @@ const Blueprints = (()=>{
         }
 
         availableBlueprintRunsByName = new Map();
+        availableBlueprintRunsForJobs = new Map();
+        availableBlueprintRunsByBucket = new Map();
+        Object.keys(hangarContext.bucketHangars).forEach(bucketKey => {
+          availableBlueprintRunsByBucket.set(Number(bucketKey), new Map());
+        });
         blueprintCopies.forEach(bpc => {
           const runsInUse = bpcJobRunsByBlueprintId[bpc.itemId];
           const availableRuns = bpc.runs - (runsInUse != null ? runsInUse : 0);
           if (availableRuns > 0) {
             addQuantityRowsToMap(availableBlueprintRunsByName, [[bpc.typeName, availableRuns]]);
+            addQuantityRowsToMap(availableBlueprintRunsForJobs, [[bpc.typeName, availableRuns]]);
+            availableBlueprintRunsByBucket.forEach((bucketMap, bucketKey) => {
+              const bucketHangars = hangarContext.bucketHangars[bucketKey] || [];
+              if (bucketHangars.some(hangar => blueprintMatchesHangar(bpc, hangar))) {
+                addQuantityRowsToMap(bucketMap, [[bpc.typeName, availableRuns]]);
+              }
+            });
           }
         });
 
@@ -1305,6 +1412,19 @@ const Blueprints = (()=>{
           availableBlueprintRunsByName,
           getFinishedJobProducts(plannedJobs, deliveredResearchJobs)
         );
+        addQuantityRowsToMap(
+          availableBlueprintRunsForJobs,
+          getFinishedJobProducts(plannedJobs, deliveredResearchJobs)
+        );
+        availableBlueprintRunsByBucket.forEach((bucketMap, bucketKey) => {
+          const bucketHangars = hangarContext.bucketHangars[bucketKey] || [];
+          const projectedRows = [];
+          bucketHangars.forEach(hangar => {
+            const rows = getFinishedJobProducts(plannedJobs, deliveredResearchJobs, hangar.locationID);
+            rows.forEach(row => projectedRows.push(row));
+          });
+          addQuantityRowsToMap(bucketMap, projectedRows);
+        });
       });
       trace(allRunningJobs);
 
@@ -1319,58 +1439,50 @@ const Blueprints = (()=>{
         let isAdvanced = refreshedJob[9];
         let inprogress = Number(refreshedJob[11]) || 0;
         let required = Number(refreshedJob[12]) || 0;
-        let ready = Number(refreshedJob[13]) || 0;
-        const deliveredReadyFallback = getQuantityFromProductActionMap(deliveredReadyByProduct, product, action);
+        const sourceHangars = getSourceHangarsForAction(action, useBufferHangars, isAdvanced);
+        const sourceHangar = sourceHangars.sourceHangar;
+        const sourceHangarAlt = sourceHangars.sourceHangarAlt;
+        const blueprintLikeProduct = isBlueprintLikeName(product);
+        const readyFromSheet = Number(refreshedJob[13]) || 0;
+        const readyFromBlueprintStock = blueprintLikeProduct
+          ? getBlueprintAliasQuantity(availableBlueprintRunsByBucket.get(sourceHangar), product)
+          : 0;
+        let ready = Math.max(readyFromSheet, readyFromBlueprintStock);
+        const deliveredReadyFallback = blueprintLikeProduct
+          ? getQuantityFromProductActionMap(deliveredReadyByBucket.get(sourceHangar), product, action)
+          : getQuantityFromProductActionMap(deliveredReadyByProduct, product, action);
         const effectiveReady = (ready < required && deliveredReadyFallback > 0)
           ? Math.min(required, ready + deliveredReadyFallback)
           : ready;
 
         // update job status
-        if (effectiveReady >= required) {
-          statusValues[row][0] = 'Hotovo';
-        } else if (effectiveReady + inprogress >= required) {
+        if (inprogress > 0 && effectiveReady + inprogress >= required) {
           statusValues[row][0] = 'Běží';
+        } else if (effectiveReady >= required) {
+          statusValues[row][0] = 'Hotovo';
         } else {
           // find if all required inputs are in right hangar
           let canStart = true;
+          const remainingOutput = Math.max(required - effectiveReady - inprogress, 0);
+          const totalOutput = Number(refreshedJob[6]) || 0;
 
-          // identify the job input hangar
-          let sourceHangar = 0      // hangar where the material must be located
-          let sourceHangarAlt = 0  // alternative source hangar for the material
-          if (action == "Manufacturing") {
-            if (useBufferHangars && !isAdvanced) {
-              sourceHangar = 1;     // use buffers and basic manufactoring
-              sourceHangarAlt = 2;  // as an alternative, the blueprints and other materials can be also in the advanced industry hangar
-            }
-            else sourceHangar = 2;                                     // advanced manufactoring or no buffers used
-          }
-
-          if (action == "Reaction") {
-            if (useBufferHangars && !isAdvanced) sourceHangar = 3      // use buffers and basic reaction
-            else sourceHangar = 4;                                     // advanced reaction or no buffers used
-          }
-
-          if (action == "Copying") {
-            if (useBufferHangars && !isAdvanced) sourceHangar = 5      // use buffers and basic reaction
-            else sourceHangar = 6;                                     // advanced reaction or no buffers used
-          }
-
-          if (action == "Invention") {
-            if (useBufferHangars && !isAdvanced) sourceHangar = 6      // use buffers and basic reaction
-            else sourceHangar = 6;                                     // advanced reaction or no buffers used
-          }
-
-          let log = "Hangár č." + sourceHangar + " chybí:";
+          let missingMaterials = [];
+          let log = '';
 
           if (materials) {
             materials.forEach(material => {
               let materialVolume = 0;
               const blueprintLikeMaterial = isBlueprintLikeName(material.type);
+              const copyingUsesExternalOriginal = action == 'Copying' && blueprintLikeMaterial;
+
+              if (copyingUsesExternalOriginal) {
+                return;
+              }
 
               // find amount in input materials
               let materialRecord = (inputIndexByName.has(material.type) ? refreshedInputMaterials[inputIndexByName.get(material.type)] : null);
               if (blueprintLikeMaterial) {
-                materialVolume += getQuantityFromMap(availableBlueprintRunsByName, material.type);
+                materialVolume += getBlueprintAliasQuantity(availableBlueprintRunsForJobs, material.type);
               } else if (materialRecord) {
                 materialVolume += materialRecord[15 + sourceHangar];
               }
@@ -1384,8 +1496,12 @@ const Blueprints = (()=>{
                 if (sourceHangarAlt) materialVolume += jobRecord[14 + sourceHangarAlt];
               }
 
-              // material quantity for one run must be less than material available in hangar to start job
-              let missingVolume = (material.quantity / runs) - materialVolume;
+              // Regular materials only need enough stock to start one run, but blueprint-like
+              // subcomponents must cover the full remaining planned demand for this row.
+              const requiredMaterialVolume = blueprintLikeMaterial
+                ? (totalOutput > 0 ? Math.ceil(material.quantity * remainingOutput / totalOutput) : material.quantity)
+                : (material.quantity / runs);
+              let missingVolume = requiredMaterialVolume - materialVolume;
               if (missingVolume > 0 && !blueprintLikeMaterial) {
                 let projectedDelivered = getQuantityFromProductActionMap(deliveredReadyByBucket.get(sourceHangar), material.type, materialAction);
                 if (sourceHangarAlt) projectedDelivered += getQuantityFromProductActionMap(deliveredReadyByBucket.get(sourceHangarAlt), material.type, materialAction);
@@ -1393,21 +1509,29 @@ const Blueprints = (()=>{
               }
 
               if (missingVolume > 0) {
-                log = log + "\n" + material.type + " " + missingVolume
+                missingMaterials.push(material.type + " " + missingVolume);
                 canStart = false;
               }
             })
           }
 
+          if (missingMaterials.length > 0) {
+            log = "Hangár č." + sourceHangar + " chybí:\n" + missingMaterials.join("\n");
+          }
+
           // BPO must be available for copy job
           if (action == "Copying" && canStart) {
             const blueprintKey = normalizeIndustryKeyPart(blueprint);
-            const freeBpoCount = blueprintKey ? (Number(availableBposByBlueprint.get(blueprintKey)) || 0) : 0;
+            const freeBpoCount = blueprintKey ? getBlueprintAliasQuantity(availableBposByBlueprint, blueprint) : 0;
             trace('Copying BPO availability', blueprint, freeBpoCount);
 
             if (freeBpoCount <= 0) {
+              const totalBpoCount = blueprintKey ? getBlueprintAliasQuantity(totalBposByBlueprint, blueprint) : 0;
+              const activeBpoCount = blueprintKey ? getBlueprintAliasQuantity(activeBpoReservationsByBlueprint, blueprint) : 0;
+              const preparedBpoCount = blueprintKey ? getBlueprintAliasQuantity(preparedBpoReservationsByBlueprint, blueprint) : 0;
               canStart = false;
-              log = log + "\n- Není volné BPO!";
+              const bpoReason = 'Není volné BPO! Celkem: ' + totalBpoCount + ', běží: ' + activeBpoCount + ', rezervováno: ' + preparedBpoCount;
+              log = log ? (log + "\n- " + bpoReason) : bpoReason;
             }
 
           }
@@ -1415,13 +1539,7 @@ const Blueprints = (()=>{
           if (canStart) {
             statusValues[row][0] = 'Připraveno';
             if (action == 'Copying') {
-              const blueprintKey = normalizeIndustryKeyPart(blueprint);
-              if (blueprintKey) {
-                availableBposByBlueprint.set(
-                  blueprintKey,
-                  Math.max(0, (Number(availableBposByBlueprint.get(blueprintKey)) || 0) - 1)
-                );
-              }
+              adjustBlueprintAliasQuantity(availableBposByBlueprint, blueprint, -1);
             }
           } else {
             statusValues[row][0] = 'Čeká';

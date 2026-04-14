@@ -498,6 +498,10 @@ const Universe = (()=>{
       return ret;
     },
 
+    resetMainMapCache: function() {
+      mainMap = null;
+    },
+
     /*
      * Utility, translates duration in seconds to string
      * duration: duration in seconds
