@@ -14,6 +14,7 @@ from . import db
 from .esi import ESIClient
 from .logger import log
 from .services import blueprints as blueprints_service
+from .services.activity import ActivityService
 from .services.assets import AssetsService
 from .services.jobs import JobsService
 from .services.user_info import UserInfoService
@@ -27,6 +28,7 @@ def create_app() -> Starlette:
     esi = ESIClient(settings.eve_api_base)
     user_info = UserInfoService(esi)
     assets_service = AssetsService(esi)
+    activity_service = ActivityService(esi)
     jobs_service = JobsService(esi)
     wallet_journal_service = WalletJournalService(esi)
     wallet_transactions_service = WalletTransactionsService(esi)
@@ -36,6 +38,7 @@ def create_app() -> Starlette:
         app.state.esi = esi
         app.state.user_info = user_info
         app.state.assets_service = assets_service
+        app.state.activity_service = activity_service
         app.state.jobs_service = jobs_service
         app.state.wallet_journal_service = wallet_journal_service
         app.state.wallet_transactions_service = wallet_transactions_service
@@ -77,12 +80,22 @@ def create_app() -> Starlette:
                 except Exception as exc:
                     log(3, f"cron() walletTransactions.sync Error: {exc}")
 
+            async def _activity_sync() -> None:
+                try:
+                    log(2, "cron() activity.sync")
+                    access_token = await user_info.get_ceo_access_token()
+                    cnt = await activity_service.sync(settings.corporation_id, access_token)
+                    log(1, f"Records synchronized: {cnt}")
+                except Exception as exc:
+                    log(3, f"cron() activity.sync Error: {exc}")
+
             def _run(coro):
                 asyncio.create_task(coro())
 
             scheduler.add_job(lambda: _run(_jobs_sync), CronTrigger(hour=4, minute=0))
             scheduler.add_job(lambda: _run(_wallet_sync), CronTrigger(hour=4, minute=15))
             scheduler.add_job(lambda: _run(_wallet_transactions_sync), CronTrigger(hour=4, minute=30))
+            scheduler.add_job(lambda: _run(_activity_sync), CronTrigger(hour="0,4,8,12,16,20", minute=45))
             scheduler.start()
             app.state.scheduler = scheduler
 
@@ -399,6 +412,35 @@ def create_app() -> Starlette:
         finally:
             log(1, f"GET /api/corporation/{corporation_id}/jobs finished")
 
+    async def get_activity_sync(request: Request) -> Response:
+        corporation_id = int(request.path_params["corporation_id"])
+        log(2, f"GET /api/corporation/{corporation_id}/activity/sync")
+        try:
+            await request.app.state.user_info.validate_token(request.headers.get("authorization"))
+            ceo_access_token = await request.app.state.user_info.get_ceo_access_token()
+            cnt = await request.app.state.activity_service.sync(corporation_id, ceo_access_token)
+            msg = f"Records synchronized: {cnt}"
+            log(1, msg)
+            return PlainTextResponse(msg)
+        except Exception as exc:
+            return PlainTextResponse(f"Chyba: {exc}")
+        finally:
+            log(1, f"GET /api/corporation/{corporation_id}/activity/sync finished")
+
+    async def get_activity_report(request: Request) -> Response:
+        corporation_id = int(request.path_params["corporation_id"])
+        year = int(request.path_params["year"])
+        month = int(request.path_params["month"])
+        log(2, f"GET /api/corporation/{corporation_id}/activity/report/{year}/{month}")
+        try:
+            await request.app.state.user_info.validate_token(request.headers.get("authorization"))
+            items = await request.app.state.activity_service.get_report(year, month)
+            return JSONResponse(items)
+        except Exception as exc:
+            return PlainTextResponse(f"Chyba: {exc}")
+        finally:
+            log(1, f"GET /api/corporation/{corporation_id}/activity/report/{year}/{month} finished")
+
     async def post_wallet_journal_report(request: Request) -> Response:
         corporation_id = int(request.path_params["corporation_id"])
         wallet = int(request.path_params["wallet"])
@@ -518,6 +560,12 @@ def create_app() -> Starlette:
         Route(
             "/api/corporation/{corporation_id:int}/jobs/report/{year:int}/{month:int}",
             get_jobs_report,
+            methods=["GET"],
+        ),
+        Route("/api/corporation/{corporation_id:int}/activity/sync", get_activity_sync, methods=["GET"]),
+        Route(
+            "/api/corporation/{corporation_id:int}/activity/report/{year:int}/{month:int}",
+            get_activity_report,
             methods=["GET"],
         ),
         Route("/api/corporation/{corporation_id:int}/jobs/velocity", post_jobs_velocity, methods=["POST"]),

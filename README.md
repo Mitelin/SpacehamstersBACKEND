@@ -176,10 +176,12 @@ Server listens on `0.0.0.0:8000`.
 
 ### Internal scheduler (optional)
 
-If you set `ENABLE_SCHEDULER=1`, the backend will run two scheduled jobs (timezone UTC) inside the same process:
+If you set `ENABLE_SCHEDULER=1`, the backend will run scheduled jobs (timezone UTC) inside the same process:
 
 - 04:00 UTC: industry jobs sync
 - 04:15 UTC: wallet journal sync (wallet 1)
+- 04:30 UTC: wallet transactions sync (industry wallet)
+- 00:45, 04:45, 08:45, 12:45, 16:45, 20:45 UTC: activity member-tracking snapshots
 
 If you run the launcher from cron/systemd timers, you typically keep this disabled (`ENABLE_SCHEDULER=0`) and schedule sync separately.
 

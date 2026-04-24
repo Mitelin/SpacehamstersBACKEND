@@ -25,6 +25,7 @@ function onOpen() {
     .addItem('Načíst: Sklady', 'syncAssets')
 //    .addItem('Načíst: P&L', 'downloadPL')
     .addItem('Načíst: Industry joby', 'syncJobs')
+    .addItem('Načíst: Aktivita', 'syncActivity')
     .addItem('Načíst: Hangáry', 'syncHangars')
     .addItem('Projekty: Aktualizuj vše', 'runUpdateAllProjects')
     .addItem('Zasobovani: Nakup list', 'zasobovaniUpdateNakupList')

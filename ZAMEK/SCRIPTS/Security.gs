@@ -17,7 +17,7 @@ const Security = (()=>{
   // NOTE: EVE SSO validates scopes only after login; keeping scopes small improves reliability.
   // Full login (legacy): keep existing corp tooling working.
   // IMPORTANT: `esi-markets.read_character_orders.v1` is requested via the separate Sales login.
-  const scopesFull = 'esi-markets.read_corporation_orders.v1 esi-skills.read_skills.v1 esi-universe.read_structures.v1 esi-wallet.read_corporation_wallets.v1 esi-corporations.read_container_logs.v1 esi-assets.read_corporation_assets.v1 esi-industry.read_corporation_jobs.v1 esi-assets.read_assets.v1 esi-industry.read_character_jobs.v1 esi-corporations.read_blueprints.v1 esi-markets.structure_markets.v1 esi-search.search_structures.v1 esi-contracts.read_corporation_contracts.v1 esi-contracts.read_character_contracts.v1'
+  const scopesFull = 'esi-markets.read_corporation_orders.v1 esi-skills.read_skills.v1 esi-universe.read_structures.v1 esi-wallet.read_corporation_wallets.v1 esi-corporations.read_container_logs.v1 esi-assets.read_corporation_assets.v1 esi-industry.read_corporation_jobs.v1 esi-assets.read_assets.v1 esi-industry.read_character_jobs.v1 esi-corporations.read_blueprints.v1 esi-markets.structure_markets.v1 esi-search.search_structures.v1 esi-contracts.read_corporation_contracts.v1 esi-contracts.read_character_contracts.v1 esi-corporations.track_members.v1'
   // Sales login: minimal personal scopes needed by Sales.gs
   const scopesSales = 'esi-assets.read_assets.v1 esi-skills.read_skills.v1 esi-markets.read_character_orders.v1'
   // Corporate login: stores tokens into ScriptProperties for corp tooling (Projects).
@@ -185,6 +185,10 @@ const Security = (()=>{
       {
         label: 'corporate blueprints',
         url: esiApi + '/corporations/' + corpId + '/blueprints/?datasource=tranquility&page=1'
+      },
+      {
+        label: 'member tracking',
+        url: esiApi + '/corporations/' + corpId + '/membertracking/?datasource=tranquility'
       }
     ];
 

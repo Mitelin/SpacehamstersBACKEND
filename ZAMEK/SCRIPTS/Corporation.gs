@@ -110,6 +110,23 @@ const Corporation = (()=>{
     _freezeMemo = on ? true : false;
   }
 
+  var ACTIVITY_SUMMARY_START_ROW = 6;
+  var ACTIVITY_SUMMARY_HEADERS = [
+    'Pilot',
+    'Main',
+    'Aktivní dny',
+    'Dnes viděn',
+    'Odhad hodin',
+    'Status',
+    'Poslední login',
+    'Poslední logout',
+    'Poslední lokace',
+    'Poslední ship',
+    'V corp od',
+    'Snapshotů měsíc',
+    'Character ID'
+  ];
+
   var _blueprintMatchesHangar = function(item, hangar) {
     if (!item || !hangar) return false;
 
@@ -126,6 +143,213 @@ const Corporation = (()=>{
     }
 
     return false;
+  }
+
+  var _toIsoOrEmpty = function(value) {
+    if (!value) return '';
+    var dt = new Date(value);
+    if (isNaN(dt.getTime())) return '';
+    return dt.toISOString();
+  }
+
+  var _dateOnlyKey = function(value) {
+    if (!value) return '';
+    var dt = new Date(value);
+    if (isNaN(dt.getTime())) return '';
+    return dt.toISOString().slice(0, 10);
+  }
+
+  var _isLikelyOnline = function(item) {
+    var logon = item && item.logonDate ? new Date(item.logonDate).getTime() : NaN;
+    var logoff = item && item.logoffDate ? new Date(item.logoffDate).getTime() : NaN;
+    if (isNaN(logon)) return false;
+    if (isNaN(logoff)) return true;
+    return logon > logoff;
+  }
+
+  var _formatDateTimeCell = function(isoValue) {
+    if (!isoValue) return '';
+    var dt = new Date(isoValue);
+    return isNaN(dt.getTime()) ? '' : dt;
+  }
+
+  var _isValidActivityPeriod = function(year, month) {
+    return year > 2020 && year < 2050 && month > 0 && month < 13;
+  }
+
+  var _readActivityPeriod = function(sheet) {
+    var year = Number(sheet.getRange(3, 1).getValue());
+    var month = Number(sheet.getRange(3, 3).getValue());
+    return { year: year, month: month };
+  }
+
+  var _getOrCreateActivitySheet = function() {
+    if (activitySheet) return activitySheet;
+    activitySheet = SpreadsheetApp.getActive().getSheetByName('Activity');
+    if (activitySheet) return activitySheet;
+    activitySheet = SpreadsheetApp.getActive().insertSheet('Activity');
+    return activitySheet;
+  }
+
+  var _ensureActivityLayout = function(sheet) {
+    var now = new Date();
+    sheet.getRange(1, 1, 5, ACTIVITY_SUMMARY_HEADERS.length).breakApart();
+    sheet.getRange(1, 1).setValue('Corp Activity');
+    sheet.getRange(1, 1, 1, ACTIVITY_SUMMARY_HEADERS.length).merge();
+    sheet.getRange(1, 1)
+      .setBackground('#14324a')
+      .setFontColor('#ffffff')
+      .setFontSize(15)
+      .setFontWeight('bold')
+      .setHorizontalAlignment('left')
+      .setVerticalAlignment('middle');
+
+    sheet.getRange(2, 1, 1, 2).merge().setValue('Rok');
+    sheet.getRange(2, 3, 1, 2).merge().setValue('Měsíc');
+    sheet.getRange(2, 5, 1, 2).merge().setValue('Poslední snapshot');
+    sheet.getRange(2, 7, 1, 2).merge().setValue('Pilotů');
+    sheet.getRange(2, 9, 1, 2).merge().setValue('Snapshotů');
+    sheet.getRange(2, 11, 1, 2).merge().setValue('Report měsíc');
+    sheet.getRange(2, 13, 2, 1).merge().setValue('Backend\n6x denně');
+
+    sheet.getRange(3, 1, 1, 2).merge();
+    sheet.getRange(3, 3, 1, 2).merge();
+    sheet.getRange(3, 5, 1, 2).merge();
+    sheet.getRange(3, 7, 1, 2).merge();
+    sheet.getRange(3, 9, 1, 2).merge();
+    sheet.getRange(3, 11, 1, 2).merge();
+
+    if (!sheet.getRange(3, 1).getValue()) {
+      sheet.getRange(3, 1).setValue(now.getFullYear());
+    }
+    if (!sheet.getRange(3, 3).getValue()) {
+      sheet.getRange(3, 3).setValue(now.getMonth() + 1);
+    }
+
+    sheet.getRange(2, 1, 2, 12)
+      .setBorder(true, true, true, true, true, true, '#d9e2ec', SpreadsheetApp.BorderStyle.SOLID);
+    sheet.getRange(2, 1, 1, 12)
+      .setFontWeight('bold')
+      .setFontColor('#486581')
+      .setBackground('#eef6fb')
+      .setHorizontalAlignment('center');
+    sheet.getRange(3, 1, 1, 4)
+      .setBackground('#fff8db')
+      .setHorizontalAlignment('center')
+      .setFontWeight('bold');
+    sheet.getRange(3, 5, 1, 8)
+      .setBackground('#ffffff')
+      .setHorizontalAlignment('center')
+      .setFontWeight('bold');
+    sheet.getRange(2, 13, 2, 1)
+      .setBackground('#eef6fb')
+      .setFontColor('#355468')
+      .setFontWeight('bold')
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle')
+      .setWrap(true)
+      .setBorder(true, true, true, true, false, false, '#d9e2ec', SpreadsheetApp.BorderStyle.SOLID);
+
+    sheet.getRange(4, 1, 1, ACTIVITY_SUMMARY_HEADERS.length)
+      .merge()
+      .setValue('Activity běží z backend snapshotů 6x denně. Vyber rok a měsíc, pak spusť Načíst: Aktivita.')
+      .setBackground('#eef6fb')
+      .setFontColor('#355468')
+      .setFontStyle('italic')
+      .setHorizontalAlignment('left');
+
+    sheet.getRange(5, 1, 1, ACTIVITY_SUMMARY_HEADERS.length).setValues([ACTIVITY_SUMMARY_HEADERS]);
+    sheet.getRange(5, 1, 1, ACTIVITY_SUMMARY_HEADERS.length)
+      .setFontWeight('bold')
+      .setBackground('#d7e9f5')
+      .setHorizontalAlignment('center')
+      .setBorder(true, true, true, true, true, true, '#cbd2d9', SpreadsheetApp.BorderStyle.SOLID);
+
+    sheet.setFrozenRows(5);
+    sheet.setRowHeights(1, 5, 28);
+    sheet.setRowHeight(1, 34);
+    sheet.setRowHeight(4, 26);
+
+    sheet.setColumnWidths(1, ACTIVITY_SUMMARY_HEADERS.length, 124);
+    sheet.setColumnWidth(1, 180);
+    sheet.setColumnWidth(3, 70);
+    sheet.setColumnWidth(2, 160);
+    sheet.setColumnWidth(5, 105);
+    sheet.setColumnWidth(6, 95);
+    sheet.setColumnWidth(7, 150);
+    sheet.setColumnWidth(8, 150);
+    sheet.setColumnWidth(9, 160);
+    sheet.setColumnWidth(10, 160);
+    sheet.setColumnWidth(11, 120);
+    sheet.setColumnWidth(13, 95);
+  }
+
+  var _translateActivityRows = function(items) {
+    return items.map(function(item) {
+      var pilot = String(item.characterName || '');
+      var locationId = item.locationId || '';
+      var shipTypeId = item.shipTypeId || '';
+      return [
+        pilot,
+        Universe.getMainName(pilot),
+        Number(item.activeDays || 0),
+        item.seenToday ? 'ANO' : '',
+        Number(item.estimatedHours || 0),
+        String(item.status || ''),
+        _formatDateTimeCell(item.lastLogin),
+        _formatDateTimeCell(item.lastLogout),
+        locationId ? Universe.getLocationName(locationId) : '',
+        item.shipName || (shipTypeId ? Universe.getType(shipTypeId).type_name : ''),
+        _formatDateTimeCell(item.startDate),
+        Number(item.snapshotCount || 0),
+        Number(item.characterId || 0)
+      ];
+    });
+  }
+
+  var _writeActivitySummary = function(sheet, rows, meta, year, month) {
+    var clearRows = Math.max(0, sheet.getMaxRows() - ACTIVITY_SUMMARY_START_ROW + 1);
+    if (clearRows > 0) {
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 1, clearRows, ACTIVITY_SUMMARY_HEADERS.length).clearContent().clearFormat();
+    }
+
+    if (rows.length > 0) {
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 1, rows.length, ACTIVITY_SUMMARY_HEADERS.length).setValues(rows);
+      var rowBackgrounds = rows.map(function(row, idx) {
+        var shade = idx % 2 === 0 ? '#ffffff' : '#f8fbfd';
+        return new Array(ACTIVITY_SUMMARY_HEADERS.length).fill(shade);
+      });
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 1, rows.length, ACTIVITY_SUMMARY_HEADERS.length).setBackgrounds(rowBackgrounds);
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 1, rows.length, 1).setFontWeight('bold');
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 2, rows.length, 1).setFontColor('#52606d');
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 3, rows.length, 1).setHorizontalAlignment('center');
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 4, rows.length, 1).setHorizontalAlignment('center');
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 5, rows.length, 1).setNumberFormat('0.0');
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 7, rows.length, 2).setNumberFormat('yyyy-mm-dd hh:mm');
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 11, rows.length, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+
+      var statusColors = rows.map(function(row) {
+        return [row[5] === 'online' ? '#d9f2d9' : '#f2f4f7'];
+      });
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 6, rows.length, 1).setBackgrounds(statusColors).setHorizontalAlignment('center');
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 4, rows.length, 1).setBackground('#edfdf2');
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 13, rows.length, 1).setFontColor('#7b8794').setHorizontalAlignment('center');
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 1, rows.length, ACTIVITY_SUMMARY_HEADERS.length)
+        .setBorder(true, true, true, true, false, false, '#d9e2ec', SpreadsheetApp.BorderStyle.SOLID);
+    } else {
+      sheet.getRange(ACTIVITY_SUMMARY_START_ROW, 1)
+        .setValue('Pro zvolený měsíc zatím nejsou data.')
+        .setFontStyle('italic')
+        .setFontColor('#52606d');
+    }
+
+    sheet.getRange(3, 1).setValue(year);
+    sheet.getRange(3, 3).setValue(month);
+    sheet.getRange(3, 5).setValue(_formatDateTimeCell(meta.latestSnapshotAt || ''));
+    sheet.getRange(3, 7).setValue(Number(meta.pilotCount || 0));
+    sheet.getRange(3, 9).setValue(Number(meta.snapshotCount || 0));
+    sheet.getRange(3, 11).setValue(String(meta.monthKey || (year + '-' + month)));
+    sheet.getRange(3, 5).setNumberFormat('yyyy-mm-dd hh:mm');
   }
 
   const corpSAGMap = new Map();
@@ -716,6 +940,64 @@ const Corporation = (()=>{
 
       return {age: orders.age, cacheRefresh: orders.cacheRefresh, data : ordersTranslated};
     },    
+
+    getActivityReport: function(year, month) {
+      var report = Aubi.getActivityReport(year, month) || {};
+      var summary = Array.isArray(report.summary) ? report.summary : [];
+      var meta = report.meta || {};
+      return {
+        summary: summary,
+        meta: meta
+      };
+    },
+
+    syncActivity: function() {
+      var sheet = _getOrCreateActivitySheet();
+      _ensureActivityLayout(sheet);
+
+      var period = _readActivityPeriod(sheet);
+      if (!_isValidActivityPeriod(period.year, period.month)) {
+        SpreadsheetApp.getUi().alert('Chyba!', 'Neplatný rok nebo měsíc v Activity.', SpreadsheetApp.getUi().ButtonSet.OK);
+        return;
+      }
+
+      var report = this.getActivityReport(period.year, period.month);
+      var rows = _translateActivityRows(report.summary || []);
+      if (rows.length > 0) {
+        _writeActivitySummary(sheet, rows, report.meta || {}, period.year, period.month);
+        SpreadsheetApp.getActive().toast('Activity: načteno ' + rows.length + ' pilotů.', 'Activity', 5);
+        return report;
+      }
+
+      var now = new Date();
+      var isCurrentMonth = Number(period.year) === now.getFullYear() && Number(period.month) === (now.getMonth() + 1);
+      if (isCurrentMonth) {
+        SpreadsheetApp.getActive().toast('Activity: backend zatím pro aktuální měsíc nic nevrátil, zkouším jednorázový sync...', 'Activity', 8);
+        try {
+          Aubi.syncActivity({ silent: true });
+          report = this.getActivityReport(period.year, period.month);
+          rows = _translateActivityRows(report.summary || []);
+          _writeActivitySummary(sheet, rows, report.meta || {}, period.year, period.month);
+          if (rows.length > 0) {
+            SpreadsheetApp.getActive().toast('Activity: data byla po synchronizaci načtena.', 'Activity', 5);
+            return report;
+          }
+        } catch (e) {
+          SpreadsheetApp.getActive().toast('Activity: automatická synchronizace selhala: ' + e, 'Activity', 10);
+          return;
+        }
+      }
+
+      _writeActivitySummary(sheet, [], report.meta || {}, period.year, period.month);
+      SpreadsheetApp.getActive().toast(
+        isCurrentMonth
+          ? 'Pro aktuální měsíc backend zatím nemá Activity data ani po jednorázové synchronizaci.'
+          : 'Backend pro zvolený měsíc nevrátil Activity data.',
+        'Activity',
+        8
+      );
+      return report;
+    },
 
     /*
      * Returns BPOs and reaction formulas in all hangars including those used in jobs
@@ -1653,6 +1935,10 @@ function updateHistorySheet() {
 
 function updateBountySheet() {
   Corporation.updateBountySheet();
+}
+
+function syncActivity() {
+  Corporation.syncActivity();
 }
 
 

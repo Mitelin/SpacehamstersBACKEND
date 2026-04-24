@@ -62,6 +62,38 @@ def test_jobs_direct_uses_ceo_token(app_client, monkeypatch: pytest.MonkeyPatch)
     assert resp.json() == [{"ok": True}]
 
 
+def test_activity_sync_uses_ceo_token(app_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = app_client.app
+    _set_auth(app, monkeypatch, user_token="user", ceo_token="ceo")
+
+    async def sync(corporation_id: int, access_token: str) -> int:
+        assert corporation_id == 123
+        assert access_token == "ceo"
+        return 9
+
+    monkeypatch.setattr(app.state.activity_service, "sync", sync)
+
+    resp = app_client.get("/api/corporation/123/activity/sync", headers={"authorization": "Bearer x"})
+    assert resp.status_code == 200
+    assert resp.text == "Records synchronized: 9"
+
+
+def test_activity_report_uses_user_token(app_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = app_client.app
+    _set_auth(app, monkeypatch, user_token="user", ceo_token="ceo")
+
+    async def get_report(year: int, month: int):
+        assert year == 2026
+        assert month == 4
+        return {"summary": [{"characterId": 1}], "meta": {"pilotCount": 1}}
+
+    monkeypatch.setattr(app.state.activity_service, "get_report", get_report)
+
+    resp = app_client.get("/api/corporation/123/activity/report/2026/4", headers={"authorization": "Bearer x"})
+    assert resp.status_code == 200
+    assert resp.json() == {"summary": [{"characterId": 1}], "meta": {"pilotCount": 1}}
+
+
 def test_assets_direct_param_mapping(app_client, monkeypatch: pytest.MonkeyPatch) -> None:
     app = app_client.app
     _set_auth(app, monkeypatch, user_token="user", ceo_token="ceo")
@@ -186,7 +218,12 @@ def test_scheduler_includes_wallet_transactions_sync(monkeypatch: pytest.MonkeyP
         assert scheduler.started is True
         assert scheduler.timezone == "UTC"
 
-        scheduled_times = sorted((trigger.fields[5].expressions[0].first, trigger.fields[6].expressions[0].first) for trigger in scheduler.jobs)
-        assert scheduled_times == [(4, 0), (4, 15), (4, 30)]
+        scheduled_times = []
+        for trigger in scheduler.jobs:
+            hours = [expr.first for expr in trigger.fields[5].expressions]
+            minutes = [expr.first for expr in trigger.fields[6].expressions]
+            scheduled_times.extend((hour, minutes[0]) for hour in hours)
+        scheduled_times = sorted(scheduled_times)
+        assert scheduled_times == [(0, 45), (4, 0), (4, 15), (4, 30), (4, 45), (8, 45), (12, 45), (16, 45), (20, 45)]
 
     assert scheduler.shutdown_called is True

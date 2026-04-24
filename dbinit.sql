@@ -33,6 +33,20 @@ CREATE TABLE IF NOT EXISTS corpNames (
     category VARCHAR (100)
 );
 
+CREATE TABLE IF NOT EXISTS corpActivitySnapshots (
+    snapshotAt DATETIME NOT NULL,
+    characterID BIGINT NOT NULL,
+    logonDate DATETIME,
+    logoffDate DATETIME,
+    startDate DATETIME,
+    locationID BIGINT,
+    shipTypeID BIGINT,
+    isOnline TINYINT(1),
+    PRIMARY KEY (snapshotAt, characterID),
+    KEY idx_corpActivity_character_snapshot (characterID, snapshotAt),
+    KEY idx_corpActivity_snapshot (snapshotAt)
+);
+
 CREATE TABLE IF NOT EXISTS corpHangars (locationFlag varchar(100) NOT NULL PRIMARY KEY, name VARCHAR(100));
 INSERT INTO corpHangars (locationFlag, name) VALUES ('CorpSAG1', 'Research')
     ON DUPLICATE KEY UPDATE name=VALUES(name);

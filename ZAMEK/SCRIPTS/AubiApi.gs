@@ -145,6 +145,20 @@ const Aubi = (()=>{
       SpreadsheetApp.getUi().alert('Synchronizace dokončena.', res, SpreadsheetApp.getUi().ButtonSet.OK);
     },
 
+    syncActivity: function(options) {
+      options = options || {};
+      var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/activity/sync', authorized_options_get());
+
+      var res = response.getContentText();
+      Logger.log(res);
+
+      if (!options.silent) {
+        SpreadsheetApp.getUi().alert('Synchronizace dokončena.', res, SpreadsheetApp.getUi().ButtonSet.OK);
+      }
+
+      return res;
+    },
+
     
     /*
      * get all hangars at defined location from Aubi DB
@@ -254,6 +268,15 @@ const Aubi = (()=>{
       var response = UrlFetchApp.fetch(aubiApi + '/corporation/' + corporationId.toString() + '/wallets/' + industryWallet + '/transactions/velocity', authorized_options_get());
 
       return parseAubiJsonResponse_(response, 'Aubi.getSalesVelocity');
+    },
+
+    getActivityReport: function(year, month) {
+      var response = UrlFetchApp.fetch(
+        aubiApi + '/corporation/' + corporationId.toString() + '/activity/report/' + year.toString() + '/' + month.toString(),
+        authorized_options_get()
+      );
+
+      return parseAubiJsonResponse_(response, 'Aubi.getActivityReport year=' + year + ' month=' + month);
     }
 
   }

@@ -54,6 +54,43 @@ globalThis.Eve = globalThis.Eve || (()=>{
     return ret;
   }
 
+  var parseRetryDelayMs = function(headers, attempt) {
+    const retryAfter = headers && (headers['Retry-After'] || headers['retry-after']);
+    const parsedRetry = Number(retryAfter);
+    if (!Number.isNaN(parsedRetry) && parsedRetry > 0) {
+      return parsedRetry * 1000;
+    }
+
+    const remain = Number(headers && (headers['X-Esi-Error-Limit-Remain'] || headers['x-esi-error-limit-remain']));
+    const reset = Number(headers && (headers['X-Esi-Error-Limit-Reset'] || headers['x-esi-error-limit-reset']));
+    if (!Number.isNaN(remain) && !Number.isNaN(reset) && remain <= 1 && reset > 0) {
+      return (reset * 1000) + 250;
+    }
+
+    return Math.min(30000, 1000 * Math.pow(2, attempt - 1));
+  }
+
+  var fetchWithRateLimitRetry = function(url, options, requestName) {
+    const maxAttempts = 4;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const response = UrlFetchApp.fetch(url, options);
+      const code = response.getResponseCode();
+      if (code !== 420 && code !== 429) {
+        return response;
+      }
+
+      if (attempt === maxAttempts) {
+        return response;
+      }
+
+      const headers = response.getHeaders();
+      const delayMs = parseRetryDelayMs(headers, attempt);
+      Logger.log('>>> ' + requestName + ' rate limited (' + code + '), retry in ' + delayMs + ' ms');
+      Utilities.sleep(delayMs);
+    }
+  }
+
   return {
     /* 
     * Resolve a set of names to IDs in the following categories: agents, alliances, characters, constellations, corporations factions, inventory_types, regions, stations, and systems. 
@@ -583,7 +620,7 @@ globalThis.Eve = globalThis.Eve || (()=>{
       // Call first page to learn paging + headers
       const options = corp_authorized_options_get();
       const baseUrl = eveApi + '/corporations/' + Corporation.getId() + '/industry/jobs/?datasource=tranquility&include_completed=' + includeCompleted.toString() + '&page=';
-      var response = UrlFetchApp.fetch(baseUrl + page, options);
+      var response = fetchWithRateLimitRetry(baseUrl + page, options, 'Eve.getCorporateJobs');
 
       // evaluate response code
       var code = response.getResponseCode();
@@ -606,17 +643,11 @@ globalThis.Eve = globalThis.Eve || (()=>{
       age = (date - lastModified) / 1000;
       cacheRefresh = (expires - date) / 1000;
 
-      // Fetch remaining pages (if any) in parallel
+      // Fetch remaining pages sequentially to avoid ESI rate-limit bursts.
       page++;
       if (maxPage && page <= maxPage) {
-        const requests = [];
         for (let p = page; p <= maxPage; p++) {
-          requests.push(Object.assign({ url: baseUrl + p }, options));
-        }
-
-        const responses = UrlFetchApp.fetchAll(requests);
-        for (let i = 0; i < responses.length; i++) {
-          const r = responses[i];
+          const r = fetchWithRateLimitRetry(baseUrl + p, options, 'Eve.getCorporateJobs page ' + p);
           const rc = r.getResponseCode();
           if (rc != 200) {
             throw ("Eve.getCorporateJobs() Error: " + rc + " " + r.getContentText())
@@ -865,6 +896,33 @@ globalThis.Eve = globalThis.Eve || (()=>{
       } while (page <= maxPage);
 
       return {age: age, cacheRefresh: cacheRefresh, data : res};
+    },
+
+    /*
+     * Return corporation member tracking information.
+     * Requires esi-corporations.track_members.v1.
+     */
+    getCorporateMemberTracking: function() {
+      Logger.log(">>> Eve.getCorporateMemberTracking ()");
+
+      var url = eveApi + '/corporations/' + Corporation.getId() + '/membertracking/?datasource=tranquility';
+      var response = fetchWithRateLimitRetry(url, corp_authorized_options_get(), 'Eve.getCorporateMemberTracking');
+
+      var code = response.getResponseCode();
+      if (code != 200) {
+        throw ("Eve.getCorporateMemberTracking() Error: " + code + " " + response.getContentText())
+      }
+
+      var json = response.getContentText();
+      var data = JSON.parse(json);
+      var headers = response.getHeaders();
+      var expires = Date.parse(headers['Expires']);
+      var date = Date.parse(headers['Date']);
+      var lastModified = Date.parse(headers['Last-Modified']);
+      var age = (date - lastModified) / 1000;
+      var cacheRefresh = (expires - date) / 1000;
+
+      return {age: age, cacheRefresh: cacheRefresh, lastModified: lastModified, expires: expires, data: data};
     },
 
     /*
