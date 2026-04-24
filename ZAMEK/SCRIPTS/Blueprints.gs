@@ -1129,22 +1129,23 @@ const Blueprints = (()=>{
        * Calculate how much material is needed for each job
        */
       let i = plannedCount - 1;
+      const propagatedTodoByRow = new Array(plannedCount).fill(0);
+      const pendingRows = new Set();
 
-      if (i == -1) {
-        throw ("Není spočítaná výroba")
-      }
+      const enqueuePendingRow = function(rowIndex) {
+        if (rowIndex < 0 || rowIndex >= plannedCount) return;
+        pendingRows.add(rowIndex);
+      };
 
-      // process jobs from the final product
-      _time(_sheetName + ' recalc compute requirements', () => {
-      do {
-        let product = plannedJobs[i][0];
-        let action = plannedJobs[i][3];
-        let total = plannedJobs[i][6];
-        let materials = materialsByRow[i];
-        let batchSize = plannedJobs[i][8];
-        let isAdvanced = plannedJobs[i][9];
-        let inprogress = plannedJobs[i][11];
-        let ready = plannedJobs[i][13];
+      const propagateRequirementsForRow = function(rowIndex) {
+        let product = plannedJobs[rowIndex][0];
+        let action = plannedJobs[rowIndex][3];
+        let total = plannedJobs[rowIndex][6];
+        let materials = materialsByRow[rowIndex];
+        let batchSize = plannedJobs[rowIndex][8];
+        let isAdvanced = plannedJobs[rowIndex][9];
+        let inprogress = plannedJobs[rowIndex][11];
+        let ready = plannedJobs[rowIndex][13];
 
         /* if action is invention, increase required amount by running manufacturing jobs of the BPC */
         /* shouldnt be needed anymore as running blueprints are ignored from available BPC runs
@@ -1161,16 +1162,16 @@ const Blueprints = (()=>{
 
         }
         */
-        let required = plannedJobs[i][12];
+        let required = plannedJobs[rowIndex][12];
 
-        trace(">>> Product [" + i + "]: " + product + " action " + action + " Total: " + total + " batchSize: " + batchSize + " required: " + required + " inprogress: " + inprogress + " ready: " + ready);
+        trace(">>> Product [" + rowIndex + "]: " + product + " action " + action + " Total: " + total + " batchSize: " + batchSize + " required: " + required + " inprogress: " + inprogress + " ready: " + ready);
 
         if (materials) {
           // job has input materials
-          if (plannedJobs[i][2] == 1) {
+          if (plannedJobs[rowIndex][2] == 1) {
             // final product at level 1 has required always empty, use total instead
             required = total;
-            plannedJobs[i][12] = total
+            plannedJobs[rowIndex][12] = total
           }
 
           // how much needs to be done
@@ -1179,6 +1180,13 @@ const Blueprints = (()=>{
 
           // recalculate required to match batch size
           todo = Math.ceil(todo/batchSize) * batchSize;
+          const propagatedTodo = propagatedTodoByRow[rowIndex];
+
+          if (todo <= propagatedTodo) {
+            return;
+          }
+
+          propagatedTodoByRow[rowIndex] = todo;
 //          console.log (">>> Todo: " + todo)
 //          log = log + " -> " + todo + " total " + total;
 
@@ -1198,29 +1206,35 @@ const Blueprints = (()=>{
               if (pos >= 0) {
                 // if job is found, increase job output amount
                 // recalculate required amount by batchsize
+                const propagatedRequired = (plannedJobs[pos][3] == "Copying")
+                  ? (Math.ceil(todo / batchSize) - Math.ceil(propagatedTodo / batchSize))
+                  : (Math.ceil(material.quantity * todo / total) - Math.ceil(material.quantity * propagatedTodo / total));
+                if (propagatedRequired <= 0) return;
+
                 if (plannedJobs[pos][3] == "Copying") {
-                  // Copying subcomponents must scale with the parent material volume,
-                  // not only with the parent todo count.
-                  plannedJobs[pos][12] += Math.ceil(material.quantity * todo / total);
+                  // Copying rows track required BPC runs, not the number of produced copies.
+                  plannedJobs[pos][12] += propagatedRequired;
                   
                 } else if (plannedJobs[pos][3] == "Invention") {
                   // BPC Invention activity, calculate needed items and deduct running T2 BPCs from available BPCs
                   trace("Invention [" + pos + "] " + plannedJobs[pos][0] + " in progress " + plannedJobs[pos][11] + " on stock " + plannedJobs[pos][13]);
                   trace("- manuf in progress " + inprogress + " ready " + ready + " required " + required);
                   trace("- material.quantity " + material.quantity + " todo " + todo + " total " + total);
-                  plannedJobs[pos][12] += Math.ceil(material.quantity * todo / total);
+                  plannedJobs[pos][12] += propagatedRequired;
 
                 } else {
                   // other activity, calculate needed items
-                  plannedJobs[pos][12] += Math.ceil(material.quantity * todo / total);
+                  plannedJobs[pos][12] += propagatedRequired;
                 }
+                enqueuePendingRow(pos);
 //                  log = log + "\n" + material.type + " volume " + Math.ceil(material.quantity * todo / total)
               } else {
                 // job not found, look in input materials
                 let pos = inputIndexByName.has(material.type) ? inputIndexByName.get(material.type) : -1;
                 if (pos >= 0) {
                   // if input material is found, increase required amount
-                  let q = Math.ceil(material.quantity * todo / total);
+                  let q = Math.ceil(material.quantity * todo / total) - Math.ceil(material.quantity * propagatedTodo / total);
+                  if (q <= 0) return;
                   inputMaterials[pos][9] += q;    // total quantity 
 
                   if (action == "Manufacturing") {
@@ -1248,11 +1262,27 @@ const Blueprints = (()=>{
 
         } else {
           // no input materials (invention/copying), required = total
-          plannedJobs[i][12] = total
+          plannedJobs[rowIndex][12] = total
         }
+      };
+
+      if (i == -1) {
+        throw ("Není spočítaná výroba")
+      }
+
+      // process jobs from the final product
+      _time(_sheetName + ' recalc compute requirements', () => {
+      do {
+        propagateRequirementsForRow(i);
 
         i--;
       } while (i >= 0);
+
+      while (pendingRows.size > 0) {
+        const rowsToRevisit = Array.from(pendingRows).sort((a, b) => b - a);
+        pendingRows.clear();
+        rowsToRevisit.forEach(rowIndex => propagateRequirementsForRow(rowIndex));
+      }
 
       });
 
