@@ -70,13 +70,9 @@ def _clip_hours(start: datetime | None, end: datetime | None, window_start: date
     return (clipped_end - clipped_start).total_seconds() / 3600.0
 
 
-def _estimate_hours(rows: list[dict[str, Any]], year: int, month: int) -> float:
-    window_start = _month_start(year, month)
-    window_end = _month_end(year, month)
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    active_until = min(now_utc, window_end)
+def _iter_session_windows(rows: list[dict[str, Any]], active_until: datetime) -> list[tuple[datetime, datetime]]:
     session_keys: set[str] = set()
-    total_hours = 0.0
+    sessions: list[tuple[datetime, datetime]] = []
     last_online_by_logon: dict[str, dict[str, Any]] = {}
 
     for row in rows:
@@ -91,7 +87,7 @@ def _estimate_hours(rows: list[dict[str, Any]], year: int, month: int) -> float:
         if key in session_keys:
             continue
         session_keys.add(key)
-        total_hours += _clip_hours(logon, logoff, window_start, window_end)
+        sessions.append((logon, logoff))
 
     for logon_key, row in last_online_by_logon.items():
         if not bool(row.get("isOnline")):
@@ -103,7 +99,41 @@ def _estimate_hours(rows: list[dict[str, Any]], year: int, month: int) -> float:
         if logon is None or active_until <= logon:
             continue
         session_keys.add(key)
-        total_hours += _clip_hours(logon, active_until, window_start, window_end)
+        sessions.append((logon, active_until))
+
+    return sessions
+
+
+def _activity_days(rows: list[dict[str, Any]], year: int, month: int) -> set[datetime.date]:
+    window_start = _month_start(year, month)
+    window_end = _month_end(year, month)
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    active_until = min(now_utc, window_end)
+    days: set[datetime.date] = set()
+
+    for start, end in _iter_session_windows(rows, active_until):
+        clipped_start = max(start, window_start)
+        clipped_end = min(end, window_end)
+        if clipped_end <= clipped_start:
+            continue
+        current_day = clipped_start.date()
+        last_day = (clipped_end - timedelta(microseconds=1)).date()
+        while current_day <= last_day:
+            days.add(current_day)
+            current_day += timedelta(days=1)
+
+    return days
+
+
+def _estimate_hours(rows: list[dict[str, Any]], year: int, month: int) -> float:
+    window_start = _month_start(year, month)
+    window_end = _month_end(year, month)
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    active_until = min(now_utc, window_end)
+    total_hours = 0.0
+
+    for logon, logoff in _iter_session_windows(rows, active_until):
+        total_hours += _clip_hours(logon, logoff, window_start, window_end)
 
     return round(total_hours, 1)
 
@@ -241,7 +271,7 @@ class ActivityService:
 
         for character_id, character_rows in grouped.items():
             last = character_rows[-1]
-            active_days = {(_parse_dt(item.get("snapshotAt")) or datetime.min).date() for item in character_rows if _parse_dt(item.get("snapshotAt"))}
+            active_days = _activity_days(character_rows, y, m)
             last_snapshot_at = _parse_dt(last.get("snapshotAt"))
             if last_snapshot_at and (latest_snapshot is None or last_snapshot_at > latest_snapshot):
                 latest_snapshot = last_snapshot_at
@@ -250,7 +280,7 @@ class ActivityService:
                     "characterId": character_id,
                     "characterName": str(last.get("characterName") or character_id),
                     "activeDays": len(active_days),
-                    "seenToday": any(day == today for day in active_days),
+                    "seenToday": today in active_days,
                     "estimatedHours": _estimate_hours(character_rows, y, m),
                     "status": "online" if bool(last.get("isOnline")) else "offline",
                     "lastLogin": last.get("logonDate"),

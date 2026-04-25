@@ -71,6 +71,61 @@ async def test_activity_report_aggregates_month_rows(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+async def test_activity_report_does_not_mark_stale_member_as_seen_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    esi = ESIClient("https://esi.test")
+    service = ActivityService(esi)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2026, 4, 25, 12, 0, 0)
+            if tz is not None:
+                return current.replace(tzinfo=tz)
+            return current
+
+    async def fake_fetch_all(sql: str, params: list) -> list[dict]:
+        assert params == ["2026-04-01", "2026-04-01"]
+        return [
+            {
+                "snapshotAt": datetime(2026, 4, 18, 12, 45),
+                "characterId": 8,
+                "characterName": "Pilot B",
+                "isOnline": 0,
+                "logonDate": datetime(2026, 4, 18, 11, 35),
+                "logoffDate": datetime(2026, 4, 18, 23, 10),
+                "locationId": 6004,
+                "shipTypeId": 114,
+                "shipName": "Golem",
+                "startDate": datetime(2024, 1, 15, 12, 0),
+            },
+            {
+                "snapshotAt": datetime(2026, 4, 25, 8, 45),
+                "characterId": 8,
+                "characterName": "Pilot B",
+                "isOnline": 0,
+                "logonDate": datetime(2026, 4, 18, 11, 35),
+                "logoffDate": datetime(2026, 4, 18, 23, 10),
+                "locationId": 6004,
+                "shipTypeId": 114,
+                "shipName": "Golem",
+                "startDate": datetime(2024, 1, 15, 12, 0),
+            },
+        ]
+
+    monkeypatch.setattr("py_backend.db.fetch_all", fake_fetch_all)
+    monkeypatch.setattr("py_backend.services.activity.datetime", FixedDatetime)
+
+    report = await service.get_report(year=2026, month=4)
+
+    await esi.close()
+
+    assert report["summary"][0]["activeDays"] == 1
+    assert report["summary"][0]["seenToday"] is False
+    assert report["summary"][0]["lastLogin"] == datetime(2026, 4, 18, 11, 35)
+    assert report["summary"][0]["lastLogout"] == datetime(2026, 4, 18, 23, 10)
+
+
+@pytest.mark.asyncio
 async def test_activity_sync_stores_rows_and_names(monkeypatch: pytest.MonkeyPatch) -> None:
     esi = ESIClient("https://esi.test")
     service = ActivityService(esi)
