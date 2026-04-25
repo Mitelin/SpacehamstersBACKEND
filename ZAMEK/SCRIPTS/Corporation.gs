@@ -177,9 +177,26 @@ const Corporation = (()=>{
     return year > 2020 && year < 2050 && month > 0 && month < 13;
   }
 
+  var _normalizeActivityNumber = function(value) {
+    if (value === '' || value === null || typeof value === 'undefined') return null;
+    var trimmed = String(value).trim();
+    if (!trimmed) return null;
+    var parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
   var _readActivityPeriod = function(sheet) {
-    var year = Number(sheet.getRange(3, 1).getValue());
-    var month = Number(sheet.getRange(3, 3).getValue());
+    var now = new Date();
+    var year = _normalizeActivityNumber(sheet.getRange(3, 1).getValue());
+    var month = _normalizeActivityNumber(sheet.getRange(3, 3).getValue());
+    if (year === null) {
+      year = now.getFullYear();
+      sheet.getRange(3, 1).setValue(year);
+    }
+    if (month === null) {
+      month = now.getMonth() + 1;
+      sheet.getRange(3, 3).setValue(month);
+    }
     return { year: year, month: month };
   }
 
@@ -252,7 +269,7 @@ const Corporation = (()=>{
 
     sheet.getRange(4, 1, 1, ACTIVITY_SUMMARY_HEADERS.length)
       .merge()
-      .setValue('Activity běží z backend snapshotů 6x denně. Vyber rok a měsíc, pak spusť Načíst: Aktivita.')
+      .setValue('Activity běží z backend snapshotů 6x denně. Rok vyplň jako 2026, měsíc číslem 1-12. Když pole necháš prázdné, použije se aktuální měsíc.')
       .setBackground('#eef6fb')
       .setFontColor('#355468')
       .setFontStyle('italic')
