@@ -70,11 +70,34 @@ globalThis.Eve = globalThis.Eve || (()=>{
     return Math.min(30000, 1000 * Math.pow(2, attempt - 1));
   }
 
+  var isTransientFetchQuotaError = function(error) {
+    if (!error) return false;
+    var message = String(error && error.message ? error.message : error).toLowerCase();
+    return message.indexOf('rate limit exceeded') >= 0
+      || message.indexOf('service invoked too many times') >= 0
+      || message.indexOf('too many times in a short time') >= 0
+      || message.indexOf('prekrocena kvota rychlosti pripojeni') >= 0
+      || message.indexOf('překročena kvóta rychlosti připojení') >= 0;
+  }
+
   var fetchWithRateLimitRetry = function(url, options, requestName) {
     const maxAttempts = 4;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const response = UrlFetchApp.fetch(url, options);
+      let response;
+      try {
+        response = UrlFetchApp.fetch(url, options);
+      } catch (e) {
+        if (!isTransientFetchQuotaError(e) || attempt === maxAttempts) {
+          throw e;
+        }
+
+        const delayMs = Math.min(30000, 1500 * Math.pow(2, attempt - 1));
+        Logger.log('>>> ' + requestName + ' fetch quota throttled, retry in ' + delayMs + ' ms: ' + e);
+        Utilities.sleep(delayMs);
+        continue;
+      }
+
       const code = response.getResponseCode();
       if (code !== 420 && code !== 429) {
         return response;
@@ -481,7 +504,7 @@ globalThis.Eve = globalThis.Eve || (()=>{
       do {
         // Call EVE Api
         var url = eveApi + '/corporations/' + Corporation.getId() + '/assets/?datasource=tranquility&page=' + page
-        var response = UrlFetchApp.fetch(url, corp_authorized_options_get());
+        var response = fetchWithRateLimitRetry(url, corp_authorized_options_get(), 'Eve.getCorporateAssets page ' + page);
 
         // evaluate response code
         var code = response.getResponseCode();
@@ -558,8 +581,8 @@ globalThis.Eve = globalThis.Eve || (()=>{
       do {
         // Call EVE Api
         var url = eveApi + '/corporations/' + Corporation.getId() + '/blueprints/?datasource=tranquility&page=' + page
-//        var response = UrlFetchApp.fetch(url, authorized_options_get());
-        var response = UrlFetchApp.fetch(url, corp_authorized_options_get());
+      //        var response = UrlFetchApp.fetch(url, authorized_options_get());
+        var response = fetchWithRateLimitRetry(url, corp_authorized_options_get(), 'Eve.getCorporateBlueprints page ' + page);
 
         // evaluate response code
         var code = response.getResponseCode();

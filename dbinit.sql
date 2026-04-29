@@ -47,6 +47,34 @@ CREATE TABLE IF NOT EXISTS corpActivitySnapshots (
     KEY idx_corpActivity_snapshot (snapshotAt)
 );
 
+CREATE TABLE IF NOT EXISTS corpActivityMonthly (
+    year INT NOT NULL,
+    month INT NOT NULL,
+    characterID BIGINT NOT NULL,
+    activeDaysMask BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    estimatedMinutes INT NOT NULL DEFAULT 0,
+    status VARCHAR(20),
+    lastLogin DATETIME,
+    lastLogout DATETIME,
+    locationID BIGINT,
+    shipTypeID BIGINT,
+    startDate DATETIME,
+    snapshotCount INT NOT NULL DEFAULT 0,
+    lastSnapshotAt DATETIME,
+    PRIMARY KEY (year, month, characterID),
+    KEY idx_corpActivityMonthly_month (year, month),
+    KEY idx_corpActivityMonthly_snapshot (lastSnapshotAt)
+);
+
+CREATE TABLE IF NOT EXISTS corpActivityState (
+    characterID BIGINT NOT NULL PRIMARY KEY,
+    lastLogonDate DATETIME,
+    lastLogoffDate DATETIME,
+    lastCountedUntil DATETIME,
+    lastSnapshotAt DATETIME,
+    KEY idx_corpActivityState_snapshot (lastSnapshotAt)
+);
+
 CREATE TABLE IF NOT EXISTS corpHangars (locationFlag varchar(100) NOT NULL PRIMARY KEY, name VARCHAR(100));
 INSERT INTO corpHangars (locationFlag, name) VALUES ('CorpSAG1', 'Research')
     ON DUPLICATE KEY UPDATE name=VALUES(name);
