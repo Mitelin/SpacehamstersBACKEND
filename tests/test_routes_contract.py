@@ -224,6 +224,8 @@ def test_scheduler_includes_wallet_transactions_sync(monkeypatch: pytest.MonkeyP
             minutes = [expr.first for expr in trigger.fields[6].expressions]
             scheduled_times.extend((hour, minutes[0]) for hour in hours)
         scheduled_times = sorted(scheduled_times)
-        assert scheduled_times == [(0, 45), (4, 0), (4, 15), (4, 30), (4, 45), (8, 45), (12, 45), (16, 45), (20, 45)]
+        assert scheduled_times == sorted(
+            [(4, 0), (4, 15), (4, 30)] + [(hour, 45) for hour in range(24)]
+        )
 
     assert scheduler.shutdown_called is True

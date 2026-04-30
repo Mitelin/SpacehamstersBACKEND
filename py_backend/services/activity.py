@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from .. import db
@@ -49,6 +50,39 @@ def _parse_dt(value: Any) -> datetime | None:
     return parsed.replace(tzinfo=None)
 
 
+def _parse_http_date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed.replace(tzinfo=None, second=0, microsecond=0)
+
+
+def _response_snapshot_at(response: Any, fallback: datetime | None = None) -> datetime:
+    headers = getattr(response, "headers", {}) or {}
+    last_modified = None
+    try:
+        last_modified = headers.get("Last-Modified") or headers.get("last-modified")
+    except AttributeError:
+        last_modified = None
+    parsed = _parse_http_date(last_modified)
+    if parsed:
+        return parsed
+    return fallback or datetime.now(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
+
+
+def _response_has_last_modified(response: Any) -> bool:
+    headers = getattr(response, "headers", {}) or {}
+    try:
+        return bool(headers.get("Last-Modified") or headers.get("last-modified"))
+    except AttributeError:
+        return False
+
+
 def _month_start(year: int, month: int) -> datetime:
     return datetime(int(year), int(month), 1)
 
@@ -88,6 +122,17 @@ def _iter_session_windows(rows: list[dict[str, Any]], active_until: datetime) ->
         logon = _parse_dt(row.get("logonDate"))
         logoff = _parse_dt(row.get("logoffDate"))
         if logon is None or logoff is None or logoff <= logon:
+            if not bool(row.get("isOnline")) or logon is None:
+                continue
+            snapshot_at = _parse_dt(row.get("snapshotAt")) or active_until
+            end = min(snapshot_at, active_until)
+            if end <= logon:
+                continue
+            key = f"{row.get('logonDate')}|{end}"
+            if key in session_keys:
+                continue
+            session_keys.add(key)
+            sessions.append((logon, end))
             continue
         key = f"{row.get('logonDate')}|{row.get('logoffDate')}"
         if key in session_keys:
@@ -194,13 +239,15 @@ def _build_incremental_activity_updates(
     item: dict[str, Any],
     snapshot_at: datetime,
     state: dict[str, Any] | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    snapshot_is_current: bool = True,
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
     character_id = int(item.get("character_id"))
     logon = _parse_dt(item.get("logon_date"))
     logoff = _parse_dt(item.get("logoff_date"))
     is_online = _is_online_session(logon, logoff)
 
     updates_by_month: dict[tuple[int, int], dict[str, Any]] = {}
+    intervals: list[dict[str, Any]] = []
 
     def ensure_update(year: int, month: int, snapshot_count: int) -> dict[str, Any]:
         key = (int(year), int(month))
@@ -225,27 +272,51 @@ def _build_incremental_activity_updates(
 
     ensure_update(snapshot_at.year, snapshot_at.month, 1)
 
+    closed_session = bool(logon and logoff and logoff > logon)
     session_end: datetime | None = None
-    if logon and logoff and logoff > logon:
+    if closed_session:
         session_end = logoff
     elif is_online and logon and snapshot_at > logon:
         session_end = snapshot_at
 
     last_logon = _parse_dt((state or {}).get("lastLogonDate"))
+    last_logoff = _parse_dt((state or {}).get("lastLogoffDate"))
     last_counted_until = _parse_dt((state or {}).get("lastCountedUntil"))
     last_snapshot_at = _parse_dt((state or {}).get("lastSnapshotAt"))
     counted_until = last_counted_until
+
+    if last_snapshot_at and snapshot_at <= last_snapshot_at and last_logon == logon and last_logoff == logoff:
+        return [], dict(state or {}), []
+
+    if is_online and not closed_session and not snapshot_is_current:
+        return [], dict(state or {}), []
 
     if logon and session_end:
         count_start = logon
         if last_logon == logon and last_counted_until:
             count_start = max(logon, last_counted_until)
+        elif closed_session:
+            count_start = logon
         elif last_snapshot_at:
             count_start = max(logon, last_snapshot_at)
         else:
-            count_start = session_end
+            count_start = logon
 
         if session_end > count_start:
+            intervals.append(
+                {
+                    "characterId": character_id,
+                    "intervalStart": count_start,
+                    "intervalEnd": session_end,
+                    "sourceSnapshotAt": snapshot_at,
+                    "sourceKind": "closed" if closed_session else "online",
+                    "logonDate": logon,
+                    "logoffDate": logoff,
+                    "locationId": item.get("location_id"),
+                    "shipTypeId": item.get("ship_type_id"),
+                    "startDate": _parse_dt(item.get("start_date")),
+                }
+            )
             for year, month, segment_start, segment_end in _iter_month_segments(count_start, session_end):
                 update = ensure_update(year, month, 0)
                 update["estimatedMinutes"] += _clip_minutes(segment_start, segment_end, segment_start, segment_end)
@@ -261,7 +332,7 @@ def _build_incremental_activity_updates(
         "lastCountedUntil": counted_until,
         "lastSnapshotAt": snapshot_at,
     }
-    return list(updates_by_month.values()), new_state
+    return list(updates_by_month.values()), new_state, intervals
 
 
 def _estimate_minutes(rows: list[dict[str, Any]], year: int, month: int) -> int:
@@ -376,17 +447,32 @@ class ActivityService:
             if resp.status_code != 200:
                 raise RuntimeError(resp.text or resp.reason_phrase)
 
-            items = list(resp.json() or [])
-            current_snapshot = snapshot_at or datetime.now(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
+            payload = resp.json() or []
+            current_snapshot = snapshot_at or _response_snapshot_at(resp)
+            snapshot_is_current = bool(snapshot_at) or _response_has_last_modified(resp)
 
-            if items:
-                await self.sync_names(items, access_token)
+            if not isinstance(payload, list):
+                log(3, "activity.sync skipped: unexpected ESI membertracking payload")
+                return 0
+            items = list(payload)
+            if not items:
+                log(2, "activity.sync skipped: empty ESI membertracking payload")
+                return 0
+
+            await self.sync_names(items, access_token)
             cnt = await self.store(items, current_snapshot)
-            await self.update_monthly_activity(items, current_snapshot)
+            await self.update_monthly_activity(items, current_snapshot, snapshot_is_current=snapshot_is_current)
             return cnt
 
     async def sync_names(self, items: list[dict[str, Any]], access_token: str) -> int:
         ids = sorted({int(item.get("character_id")) for item in list(items) if item.get("character_id") is not None})
+        if not ids:
+            return 0
+
+        placeholders = ",".join(["%s"] * len(ids))
+        rows = await db.fetch_all(f"SELECT ID FROM corpNames WHERE ID IN ({placeholders})", ids)
+        known_ids = {int(row.get("ID")) for row in rows if row.get("ID") is not None}
+        ids = [character_id for character_id in ids if character_id not in known_ids]
         if not ids:
             return 0
 
@@ -500,7 +586,7 @@ class ActivityService:
                         cnt += 1
         return cnt
 
-    async def update_monthly_activity(self, items: list[dict[str, Any]], snapshot_at: datetime) -> int:
+    async def update_monthly_activity(self, items: list[dict[str, Any]], snapshot_at: datetime, snapshot_is_current: bool = True) -> int:
         cnt = 0
         async with db.connection() as conn:
             async with conn.cursor() as cur:
@@ -520,7 +606,35 @@ class ActivityService:
                             [character_id],
                         )
                         state = await cur.fetchone()
-                        updates, new_state = _build_incremental_activity_updates(item, snapshot_at, state)
+                        updates, new_state, intervals = _build_incremental_activity_updates(
+                            item,
+                            snapshot_at,
+                            state,
+                            snapshot_is_current=snapshot_is_current,
+                        )
+                        if not updates and not intervals:
+                            continue
+                        for interval in intervals:
+                            await cur.execute(
+                                """
+                                INSERT IGNORE INTO corpActivityIntervals (
+                                    characterID, intervalStart, intervalEnd, sourceSnapshotAt, sourceKind,
+                                    logonDate, logoffDate, locationID, shipTypeID, startDate
+                                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                """,
+                                [
+                                    interval.get("characterId"),
+                                    interval.get("intervalStart"),
+                                    interval.get("intervalEnd"),
+                                    interval.get("sourceSnapshotAt"),
+                                    interval.get("sourceKind"),
+                                    interval.get("logonDate"),
+                                    interval.get("logoffDate"),
+                                    interval.get("locationId"),
+                                    interval.get("shipTypeId"),
+                                    interval.get("startDate"),
+                                ],
+                            )
                         for update in updates:
                             await cur.execute(
                                 """

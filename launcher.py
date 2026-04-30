@@ -657,6 +657,7 @@ async def ensure_database_ready(cfg: dict[str, Any], env: dict[str, str]) -> Non
             "corpNames",
             "corpActivitySnapshots",
             "corpActivityMonthly",
+            "corpActivityIntervals",
             "corpActivityState",
             "corpHangars",
             "corpJobs",

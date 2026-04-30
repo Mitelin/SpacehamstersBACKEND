@@ -66,6 +66,23 @@ CREATE TABLE IF NOT EXISTS corpActivityMonthly (
     KEY idx_corpActivityMonthly_snapshot (lastSnapshotAt)
 );
 
+CREATE TABLE IF NOT EXISTS corpActivityIntervals (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    characterID BIGINT NOT NULL,
+    intervalStart DATETIME NOT NULL,
+    intervalEnd DATETIME NOT NULL,
+    sourceSnapshotAt DATETIME NOT NULL,
+    sourceKind VARCHAR(20) NOT NULL,
+    logonDate DATETIME,
+    logoffDate DATETIME,
+    locationID BIGINT,
+    shipTypeID BIGINT,
+    startDate DATETIME,
+    UNIQUE KEY uq_corpActivityIntervals_range (characterID, intervalStart, intervalEnd),
+    KEY idx_corpActivityIntervals_character_start (characterID, intervalStart),
+    KEY idx_corpActivityIntervals_snapshot (sourceSnapshotAt)
+);
+
 CREATE TABLE IF NOT EXISTS corpActivityState (
     characterID BIGINT NOT NULL PRIMARY KEY,
     lastLogonDate DATETIME,

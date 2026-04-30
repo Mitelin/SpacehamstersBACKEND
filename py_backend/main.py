@@ -95,7 +95,8 @@ def create_app() -> Starlette:
             scheduler.add_job(lambda: _run(_jobs_sync), CronTrigger(hour=4, minute=0))
             scheduler.add_job(lambda: _run(_wallet_sync), CronTrigger(hour=4, minute=15))
             scheduler.add_job(lambda: _run(_wallet_transactions_sync), CronTrigger(hour=4, minute=30))
-            scheduler.add_job(lambda: _run(_activity_sync), CronTrigger(hour="0,4,8,12,16,20", minute=45))
+            activity_hours = ",".join(str(hour) for hour in range(24))
+            scheduler.add_job(lambda: _run(_activity_sync), CronTrigger(hour=activity_hours, minute=45))
             scheduler.start()
             app.state.scheduler = scheduler
 
