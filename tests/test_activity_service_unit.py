@@ -221,6 +221,52 @@ async def test_activity_report_reads_monthly_snapshot(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+async def test_activity_report_does_not_backfill_stale_online_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    esi = ESIClient("https://esi.test")
+    service = ActivityService(esi)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2026, 4, 30, 18, 0, 0)
+            if tz is not None:
+                return current.replace(tzinfo=tz)
+            return current
+
+    async def fake_fetch_all(sql: str, params: list) -> list[dict]:
+        if "FROM corpActivityMonthly" in sql:
+            assert params == [2026, 4]
+            return []
+        assert params == ["2026-04-01", "2026-04-01"]
+        return [
+            {
+                "snapshotAt": datetime(2026, 4, 30, 18, 0),
+                "characterId": 11,
+                "characterName": "Sly Maximus",
+                "isOnline": 1,
+                "logonDate": datetime(2026, 4, 25, 11, 5),
+                "logoffDate": datetime(2026, 4, 24, 21, 11),
+                "locationId": 30000250,
+                "shipTypeId": 626,
+                "shipName": "Vexor",
+                "startDate": datetime(2025, 8, 7, 19, 26),
+            }
+        ]
+
+    monkeypatch.setattr("py_backend.db.fetch_all", fake_fetch_all)
+    monkeypatch.setattr("py_backend.services.activity.datetime", FixedDatetime)
+
+    report = await service.get_report(year=2026, month=4)
+
+    await esi.close()
+
+    assert report["summary"][0]["status"] == "online"
+    assert report["summary"][0]["activeDays"] == 0
+    assert report["summary"][0]["estimatedMinutes"] == 0
+    assert report["summary"][0]["estimatedHours"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_activity_sync_stores_rows_and_names(monkeypatch: pytest.MonkeyPatch) -> None:
     esi = ESIClient("https://esi.test")
     service = ActivityService(esi)
@@ -286,7 +332,7 @@ async def test_activity_sync_stores_rows_and_names(monkeypatch: pytest.MonkeyPat
     assert captured["activity_snapshot"] == datetime(2026, 4, 24, 8, 45)
 
 
-def test_incremental_activity_counts_only_new_online_minutes() -> None:
+def test_incremental_activity_does_not_backfill_first_online_observation() -> None:
     item = {
         "character_id": 11,
         "logon_date": "2026-04-24T08:00:00Z",
@@ -294,7 +340,7 @@ def test_incremental_activity_counts_only_new_online_minutes() -> None:
     }
 
     updates, state = _build_incremental_activity_updates(item, datetime(2026, 4, 24, 8, 45))
-    assert updates[0]["estimatedMinutes"] == 45
+    assert updates[0]["estimatedMinutes"] == 0
     assert updates[0]["snapshotCount"] == 1
     assert state["lastCountedUntil"] == datetime(2026, 4, 24, 8, 45)
 
@@ -324,13 +370,19 @@ def test_incremental_activity_logout_closes_remaining_interval() -> None:
 
 
 def test_incremental_activity_splits_month_boundary() -> None:
+    state = {
+        "lastLogonDate": datetime(2026, 4, 30, 22, 0),
+        "lastLogoffDate": datetime(2026, 4, 30, 21, 0),
+        "lastCountedUntil": datetime(2026, 4, 30, 23, 30),
+        "lastSnapshotAt": datetime(2026, 4, 30, 23, 30),
+    }
     item = {
         "character_id": 11,
-        "logon_date": "2026-04-30T23:30:00Z",
+        "logon_date": "2026-04-30T22:00:00Z",
         "logoff_date": "2026-05-01T00:30:00Z",
     }
 
-    updates, state = _build_incremental_activity_updates(item, datetime(2026, 5, 1, 1, 0))
+    updates, state = _build_incremental_activity_updates(item, datetime(2026, 5, 1, 1, 0), state)
     by_month = {(update["year"], update["month"]): update for update in updates}
 
     assert by_month[(2026, 4)]["estimatedMinutes"] == 30
@@ -344,6 +396,7 @@ def test_incremental_activity_new_session_after_logout_counts_from_new_logon() -
         "lastLogonDate": datetime(2026, 4, 24, 8, 0),
         "lastLogoffDate": datetime(2026, 4, 24, 9, 45),
         "lastCountedUntil": datetime(2026, 4, 24, 9, 45),
+        "lastSnapshotAt": datetime(2026, 4, 24, 10, 45),
     }
     item = {
         "character_id": 11,

@@ -83,14 +83,10 @@ def _clip_minutes(start: datetime | None, end: datetime | None, window_start: da
 def _iter_session_windows(rows: list[dict[str, Any]], active_until: datetime) -> list[tuple[datetime, datetime]]:
     session_keys: set[str] = set()
     sessions: list[tuple[datetime, datetime]] = []
-    last_online_by_logon: dict[str, dict[str, Any]] = {}
 
     for row in rows:
         logon = _parse_dt(row.get("logonDate"))
         logoff = _parse_dt(row.get("logoffDate"))
-        logon_key = str(row.get("logonDate") or "")
-        if logon_key:
-            last_online_by_logon[logon_key] = row
         if logon is None or logoff is None or logoff <= logon:
             continue
         key = f"{row.get('logonDate')}|{row.get('logoffDate')}"
@@ -98,18 +94,6 @@ def _iter_session_windows(rows: list[dict[str, Any]], active_until: datetime) ->
             continue
         session_keys.add(key)
         sessions.append((logon, logoff))
-
-    for logon_key, row in last_online_by_logon.items():
-        if not bool(row.get("isOnline")):
-            continue
-        key = f"{logon_key}|"
-        if key in session_keys:
-            continue
-        logon = _parse_dt(row.get("logonDate"))
-        if logon is None or active_until <= logon:
-            continue
-        session_keys.add(key)
-        sessions.append((logon, active_until))
 
     return sessions
 
@@ -249,12 +233,17 @@ def _build_incremental_activity_updates(
 
     last_logon = _parse_dt((state or {}).get("lastLogonDate"))
     last_counted_until = _parse_dt((state or {}).get("lastCountedUntil"))
+    last_snapshot_at = _parse_dt((state or {}).get("lastSnapshotAt"))
     counted_until = last_counted_until
 
     if logon and session_end:
         count_start = logon
         if last_logon == logon and last_counted_until:
             count_start = max(logon, last_counted_until)
+        elif last_snapshot_at:
+            count_start = max(logon, last_snapshot_at)
+        else:
+            count_start = session_end
 
         if session_end > count_start:
             for year, month, segment_start, segment_end in _iter_month_segments(count_start, session_end):
@@ -262,6 +251,8 @@ def _build_incremental_activity_updates(
                 update["estimatedMinutes"] += _clip_minutes(segment_start, segment_end, segment_start, segment_end)
                 update["activeDaysMask"] |= _days_mask_between(segment_start, segment_end)
             counted_until = session_end if counted_until is None else max(counted_until, session_end)
+        elif is_online and counted_until is None:
+            counted_until = snapshot_at
 
     new_state = {
         "characterId": character_id,
