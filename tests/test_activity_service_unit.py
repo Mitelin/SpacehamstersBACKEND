@@ -203,6 +203,9 @@ async def test_activity_report_reads_monthly_snapshot(monkeypatch: pytest.Monkey
                     "lastSnapshotAt": datetime(2026, 4, 2, 12, 45),
                 }
             ]
+        if "FROM corpActivityIntervals" in sql:
+            assert params == [2026, 4, "2026-04-01", "2026-04-01"]
+            return []
         raise AssertionError("raw snapshot fallback should not be used when monthly snapshot has rows")
 
     monkeypatch.setattr("py_backend.db.fetch_all", fake_fetch_all)
@@ -218,6 +221,80 @@ async def test_activity_report_reads_monthly_snapshot(monkeypatch: pytest.Monkey
     assert report["summary"][0]["activeDaysMask"] == 6
     assert report["summary"][0]["estimatedMinutes"] == 135
     assert report["summary"][0]["estimatedHours"] == 2.2
+
+
+@pytest.mark.asyncio
+async def test_activity_report_uses_interval_minutes_when_monthly_is_stale(monkeypatch: pytest.MonkeyPatch) -> None:
+    esi = ESIClient("https://esi.test")
+    service = ActivityService(esi)
+
+    async def fake_fetch_all(sql: str, params: list) -> list[dict]:
+        if "FROM corpActivityMonthly" in sql:
+            assert params == [2026, 5]
+            return [
+                {
+                    "characterId": 11,
+                    "characterName": "Pilot E",
+                    "activeDaysMask": 1 << 2,
+                    "estimatedMinutes": 60,
+                    "status": "online",
+                    "lastLogin": datetime(2026, 5, 3, 10, 0),
+                    "lastLogout": datetime(2026, 5, 3, 9, 0),
+                    "locationId": 6007,
+                    "shipTypeId": 117,
+                    "shipName": "Ishtar",
+                    "startDate": datetime(2024, 1, 15, 12, 0),
+                    "snapshotCount": 2,
+                    "lastSnapshotAt": datetime(2026, 5, 3, 11, 0),
+                }
+            ]
+        if "FROM corpActivityIntervals" in sql:
+            assert params == [2026, 5, "2026-05-01", "2026-05-01"]
+            return [
+                {
+                    "characterId": 11,
+                    "characterName": "Pilot E",
+                    "intervalStart": datetime(2026, 5, 3, 10, 0),
+                    "intervalEnd": datetime(2026, 5, 3, 11, 0),
+                    "sourceSnapshotAt": datetime(2026, 5, 3, 11, 0),
+                    "status": "online",
+                    "lastLogin": datetime(2026, 5, 3, 10, 0),
+                    "lastLogout": datetime(2026, 5, 3, 9, 0),
+                    "locationId": 6007,
+                    "shipTypeId": 117,
+                    "shipName": "Ishtar",
+                    "startDate": datetime(2024, 1, 15, 12, 0),
+                    "snapshotCount": 2,
+                    "lastSnapshotAt": datetime(2026, 5, 3, 11, 0),
+                },
+                {
+                    "characterId": 11,
+                    "characterName": "Pilot E",
+                    "intervalStart": datetime(2026, 5, 3, 11, 0),
+                    "intervalEnd": datetime(2026, 5, 3, 13, 0),
+                    "sourceSnapshotAt": datetime(2026, 5, 3, 13, 0),
+                    "status": "online",
+                    "lastLogin": datetime(2026, 5, 3, 10, 0),
+                    "lastLogout": datetime(2026, 5, 3, 9, 0),
+                    "locationId": 6007,
+                    "shipTypeId": 117,
+                    "shipName": "Ishtar",
+                    "startDate": datetime(2024, 1, 15, 12, 0),
+                    "snapshotCount": 2,
+                    "lastSnapshotAt": datetime(2026, 5, 3, 13, 0),
+                },
+            ]
+        raise AssertionError("raw snapshot fallback should not be used when interval rows exist")
+
+    monkeypatch.setattr("py_backend.db.fetch_all", fake_fetch_all)
+
+    report = await service.get_report(year=2026, month=5)
+
+    await esi.close()
+
+    assert report["summary"][0]["estimatedMinutes"] == 180
+    assert report["summary"][0]["estimatedHours"] == 3.0
+    assert report["summary"][0]["activeDays"] == 1
 
 
 @pytest.mark.asyncio

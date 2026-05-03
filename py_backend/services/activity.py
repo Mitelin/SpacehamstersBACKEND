@@ -780,6 +780,138 @@ class ActivityService:
             },
         }
 
+    async def _fetch_interval_month_rows(self, year: int, month: int) -> list[dict[str, Any]]:
+        month_start = f"{int(year):04d}-{int(month):02d}-01"
+        return await db.fetch_all(
+            """
+            SELECT
+                i.characterID AS characterId,
+                COALESCE(cn.name, '') AS characterName,
+                i.intervalStart,
+                i.intervalEnd,
+                i.sourceSnapshotAt,
+                COALESCE(m.status, CASE WHEN i.sourceKind = 'online' THEN 'online' ELSE 'offline' END) AS status,
+                COALESCE(m.lastLogin, i.logonDate) AS lastLogin,
+                COALESCE(m.lastLogout, i.logoffDate) AS lastLogout,
+                COALESCE(m.locationID, i.locationID) AS locationId,
+                COALESCE(m.shipTypeID, i.shipTypeID) AS shipTypeId,
+                it.typeName AS shipName,
+                COALESCE(m.startDate, i.startDate) AS startDate,
+                COALESCE(m.snapshotCount, 0) AS snapshotCount,
+                COALESCE(m.lastSnapshotAt, i.sourceSnapshotAt) AS lastSnapshotAt
+            FROM corpActivityIntervals i
+            LEFT JOIN corpActivityMonthly m
+                ON m.characterID = i.characterID AND m.year = %s AND m.month = %s
+            LEFT JOIN corpNames cn ON cn.ID = i.characterID
+            LEFT JOIN invTypes it ON it.typeID = COALESCE(m.shipTypeID, i.shipTypeID)
+            WHERE i.intervalStart < DATE_ADD(%s, INTERVAL 1 MONTH)
+              AND i.intervalEnd > %s
+            ORDER BY i.characterID, i.intervalStart, i.intervalEnd
+            """,
+            [int(year), int(month), month_start, month_start],
+        )
+
+    def _build_report_from_intervals(self, rows: list[dict[str, Any]], year: int, month: int) -> dict[str, Any] | None:
+        if not rows:
+            return None
+
+        y = int(year)
+        m = int(month)
+        window_start = _month_start(y, m)
+        window_end = _month_end(y, m)
+        today = datetime.now(timezone.utc).date()
+        latest_snapshot: datetime | None = None
+        by_character: dict[int, dict[str, Any]] = {}
+
+        for row in rows:
+            character_id = int(row.get("characterId") or 0)
+            if not character_id:
+                continue
+            interval_start = _parse_dt(row.get("intervalStart"))
+            interval_end = _parse_dt(row.get("intervalEnd"))
+            if interval_start is None or interval_end is None or interval_end <= interval_start:
+                continue
+
+            item = by_character.setdefault(
+                character_id,
+                {
+                    "characterId": character_id,
+                    "characterName": str(row.get("characterName") or character_id),
+                    "intervals": [],
+                    "activeDaysMask": 0,
+                    "status": row.get("status") or "offline",
+                    "lastLogin": row.get("lastLogin"),
+                    "lastLogout": row.get("lastLogout"),
+                    "locationId": row.get("locationId"),
+                    "shipTypeId": row.get("shipTypeId"),
+                    "shipName": row.get("shipName"),
+                    "startDate": row.get("startDate"),
+                    "snapshotCount": int(row.get("snapshotCount") or 0),
+                    "lastSnapshotAt": row.get("lastSnapshotAt"),
+                },
+            )
+            item["intervals"].append((max(interval_start, window_start), min(interval_end, window_end)))
+            row_snapshot = _parse_dt(row.get("lastSnapshotAt")) or _parse_dt(row.get("sourceSnapshotAt"))
+            current_snapshot = _parse_dt(item.get("lastSnapshotAt"))
+            if row_snapshot and (current_snapshot is None or row_snapshot >= current_snapshot):
+                item["status"] = row.get("status") or "offline"
+                item["lastLogin"] = row.get("lastLogin")
+                item["lastLogout"] = row.get("lastLogout")
+                item["locationId"] = row.get("locationId")
+                item["shipTypeId"] = row.get("shipTypeId")
+                item["shipName"] = row.get("shipName")
+                item["startDate"] = row.get("startDate")
+                item["snapshotCount"] = int(row.get("snapshotCount") or item.get("snapshotCount") or 0)
+                item["lastSnapshotAt"] = row_snapshot
+            if row_snapshot and (latest_snapshot is None or row_snapshot > latest_snapshot):
+                latest_snapshot = row_snapshot
+
+        summary: list[dict[str, Any]] = []
+        snapshot_count = 0
+        for item in by_character.values():
+            merged = _merge_session_windows(
+                [(start, end) for start, end in item.pop("intervals") if end > start]
+            )
+            minutes = 0
+            mask = 0
+            for start, end in merged:
+                minutes += _clip_minutes(start, end, window_start, window_end)
+                mask |= _days_mask_between(max(start, window_start), min(end, window_end))
+            snapshot_count += int(item.get("snapshotCount") or 0)
+            summary.append(
+                {
+                    **item,
+                    "activeDays": _mask_day_count(mask),
+                    "activeDaysMask": mask,
+                    "seenToday": today.year == y and today.month == m and _mask_has_day(mask, today.day),
+                    "estimatedMinutes": minutes,
+                    "estimatedHours": round(minutes / 60.0, 1),
+                }
+            )
+
+        if not summary:
+            return None
+
+        summary.sort(
+            key=lambda item: (
+                -int(item.get("activeDays") or 0),
+                -float(item.get("estimatedHours") or 0),
+                str(item.get("characterName") or ""),
+            )
+        )
+
+        return {
+            "summary": _jsonable_rows(summary),
+            "meta": {
+                "year": y,
+                "month": m,
+                "pilotCount": len(summary),
+                "snapshotCount": snapshot_count,
+                "latestSnapshotAt": _jsonable_value(latest_snapshot),
+                "monthKey": f"{y:04d}-{m:02d}",
+            },
+        }
+
     async def get_report(self, year: int, month: int) -> dict[str, Any]:
         y = int(year)
         m = int(month)
@@ -790,6 +922,13 @@ class ActivityService:
 
         monthly_report = await self._get_report_from_monthly(y, m)
         if monthly_report is not None:
+            interval_report = self._build_report_from_intervals(await self._fetch_interval_month_rows(y, m), y, m)
+            if interval_report is None:
+                return monthly_report
+            monthly_minutes = sum(int(item.get("estimatedMinutes") or 0) for item in monthly_report["summary"])
+            interval_minutes = sum(int(item.get("estimatedMinutes") or 0) for item in interval_report["summary"])
+            if interval_minutes > monthly_minutes:
+                return interval_report
             return monthly_report
 
         report = _build_report_from_rows(await self._fetch_raw_month_rows(y, m), y, m)
