@@ -463,12 +463,12 @@ const Calculator = (() => {
   const resolveMaterialMultipliers = (facility) => {
     // Mirror backend resolve_material_multipliers() for parity.
     const st = String((facility && facility.industryStructureType) || '').trim().toLowerCase();
-    const manufacturingRoleBonus = (st === '' || st === 'station') ? 1.0 : 0.99;
+    const manufacturingRoleBonus = (st === 'station') ? 1.0 : 0.99;
 
     const rig = String((facility && facility.industryRig) || '').trim().toUpperCase();
     let manufacturingRigBonus = 1.0;
-    if (rig === 'T1') manufacturingRigBonus = 0.976;
-    else if (rig === 'T2') manufacturingRigBonus = 0.958;
+    if (rig === 'T1') manufacturingRigBonus = 0.958;
+    else if (rig === 'T2') manufacturingRigBonus = 0.9496;
 
     const rrig = String((facility && facility.reactionRig) || '').trim().toUpperCase();
     let reactionRigBonus = 1.0;

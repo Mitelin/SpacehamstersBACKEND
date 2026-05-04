@@ -18,7 +18,7 @@ def resolve_material_multipliers(
     """Resolve facility configuration into material multipliers.
 
     Notes:
-    - Defaults preserve legacy behavior (0.99 * 0.958 for manufacturing; 0.974 for reactions).
+    - Defaults model the current Sotiyo/nullsec T1 engineering rig profile used by production.
     - Values are intentionally simple and can be overridden explicitly.
     """
 
@@ -26,15 +26,18 @@ def resolve_material_multipliers(
     if manufacturing_role_bonus is None:
         st = (industry_structure_type or "").strip().lower()
         # NPC stations have no structure role bonus.
-        manufacturing_role_bonus = 1.0 if st in {"station", ""} else 0.99
+        manufacturing_role_bonus = 1.0 if st == "station" else 0.99
 
     # 2) Manufacturing rig bonus
     if manufacturing_rig_bonus is None:
         rig = (industry_rig or "").strip().upper()
-        if rig == "T1":
-            manufacturing_rig_bonus = 0.976
-        elif rig == "T2":
+        st = (industry_structure_type or "").strip().lower()
+        if st == "station" and not rig:
+            manufacturing_rig_bonus = 1.0
+        elif rig in {"T1", ""}:
             manufacturing_rig_bonus = 0.958
+        elif rig == "T2":
+            manufacturing_rig_bonus = 0.9496
         else:
             manufacturing_rig_bonus = 1.0
 
@@ -43,7 +46,7 @@ def resolve_material_multipliers(
         rrig = (reaction_rig or "").strip().upper()
         if rrig == "T1":
             reaction_rig_bonus = 0.986
-        elif rrig == "T2":
+        elif rrig in {"T2", ""}:
             reaction_rig_bonus = 0.974
         else:
             reaction_rig_bonus = 1.0

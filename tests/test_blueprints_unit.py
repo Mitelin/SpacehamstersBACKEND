@@ -1,6 +1,41 @@
 import math
 
-from py_backend.services.blueprints import add_job, add_material
+from py_backend.services.blueprints import add_job, add_material, resolve_material_multipliers
+
+
+def test_default_material_multipliers_use_sotiyo_nullsec_t1_profile() -> None:
+    assert resolve_material_multipliers(None, None, None) == (0.99, 0.958, 0.974)
+
+
+def test_material_multipliers_map_nullsec_engineering_rig_tiers() -> None:
+    assert resolve_material_multipliers("Sotiyo", "T1", None) == (0.99, 0.958, 0.974)
+    assert resolve_material_multipliers("Sotiyo", "T2", None) == (0.99, 0.9496, 0.974)
+
+
+def test_station_material_multipliers_have_no_manufacturing_bonus_without_rig() -> None:
+    assert resolve_material_multipliers("station", None, None) == (1.0, 1.0, 0.974)
+
+
+def test_capital_part_me8_uses_sotiyo_nullsec_t1_facility_bonuses() -> None:
+    result = {"materials": []}
+    product = {"quantity": 1}
+    material = {"materialTypeID": 1, "material": "Capital Part", "quantity": 500, "activityId": 1}
+    manufacturing_role_bonus, manufacturing_rig_bonus, reaction_rig_bonus = resolve_material_multipliers(None, None, None)
+
+    qty = add_material(
+        result,
+        amount=1,
+        level=1,
+        product=product,
+        material=material,
+        bp_me=8,
+        is_advanced=False,
+        manufacturing_role_bonus=manufacturing_role_bonus,
+        manufacturing_rig_bonus=manufacturing_rig_bonus,
+        reaction_rig_bonus=reaction_rig_bonus,
+    )
+
+    assert qty == 437
 
 
 def test_add_material_rounding_manufacturing_me() -> None:
