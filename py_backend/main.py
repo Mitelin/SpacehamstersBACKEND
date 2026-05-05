@@ -25,7 +25,7 @@ from .services.wallet_transactions import WalletTransactionsService
 from .settings import get_settings
 
 
-def _read_runtime_version() -> dict[str, str | bool]:
+def _read_runtime_version() -> dict[str, str | bool | int]:
     repo_root = Path(__file__).resolve().parents[1]
 
     def _git(*args: str) -> str:
@@ -78,6 +78,7 @@ def create_app() -> Starlette:
         app.state.wallet_journal_service = wallet_journal_service
         app.state.wallet_transactions_service = wallet_transactions_service
         app.state.version_info = version_info
+        app.state.scheduler_enabled = int(settings.enable_scheduler)
         app.state.scheduler = None
 
         await db.init_pool()
@@ -145,7 +146,10 @@ def create_app() -> Starlette:
             await db.close_pool()
 
     async def get_version(request: Request) -> Response:
-        return JSONResponse(request.app.state.version_info)
+        payload = dict(request.app.state.version_info)
+        payload["schedulerEnabled"] = bool(getattr(request.app.state, "scheduler_enabled", 0))
+        payload["schedulerRunning"] = bool(getattr(request.app.state, "scheduler", None))
+        return JSONResponse(payload)
 
     async def post_user_info(request: Request) -> Response:
         log(2, "POST /api/userInfo")

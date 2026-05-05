@@ -1,5 +1,10 @@
 {
   "baseUrl": "https://www.spacehamsters.eu/api",
   "corporationId": 98652228,
-  "bearerToken": "PASTE_BEARER_TOKEN_HERE"
+  "bearerToken": "PASTE_BEARER_TOKEN_HERE",
+  "refreshToken": "OPTIONAL_REFRESH_TOKEN_HERE",
+  "eveClientId": "OPTIONAL_EVE_CLIENT_ID",
+  "eveClientSecret": "OPTIONAL_EVE_CLIENT_SECRET",
+  "tokenUrl": "https://login.eveonline.com/v2/oauth/token",
+  "verifyUrl": "https://login.eveonline.com/v2/oauth/verify"
 }

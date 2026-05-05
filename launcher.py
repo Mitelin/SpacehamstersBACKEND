@@ -872,6 +872,10 @@ def main(argv: list[str] | None = None) -> int:
 
                 # Ensure local ignored content wasn't lost during update.
                 _restore_preserved(repo, snapshot, preserve_paths)
+                if pulled:
+                    cfg = _parse_config(cfg_path)
+                    repo = _get_repo_path(cfg)
+                    _log("Reloaded launcher config after git update")
             except Exception as exc:
                 raise LauncherError(f"Git pull failed: {exc}")
 

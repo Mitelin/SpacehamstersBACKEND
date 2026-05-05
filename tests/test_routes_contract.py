@@ -13,6 +13,10 @@ def _set_auth(app, monkeypatch: pytest.MonkeyPatch, *, user_token: str = "user",
 
 
 def test_version_route_returns_runtime_version(app_client) -> None:
+    class _FakeRunningScheduler:
+        def shutdown(self, wait: bool = False) -> None:
+            return None
+
     app_client.app.state.version_info = {
         "source": "git",
         "commit": "abcdef1234567890",
@@ -20,6 +24,8 @@ def test_version_route_returns_runtime_version(app_client) -> None:
         "branch": "main",
         "dirty": False,
     }
+    app_client.app.state.scheduler_enabled = 1
+    app_client.app.state.scheduler = _FakeRunningScheduler()
 
     resp = app_client.get("/api/version")
     assert resp.status_code == 200
@@ -29,6 +35,8 @@ def test_version_route_returns_runtime_version(app_client) -> None:
         "shortCommit": "abcdef1",
         "branch": "main",
         "dirty": False,
+        "schedulerEnabled": True,
+        "schedulerRunning": True,
     }
 
 

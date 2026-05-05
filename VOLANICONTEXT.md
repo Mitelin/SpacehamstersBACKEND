@@ -52,6 +52,8 @@ V praxi je bearer obvykle jedna z techto hodnot z Google Script properties:
 
 Pokud tooling bezi pres sdileny full pristup, nejpravdepodobneji je spravna hodnota `shared_full_access_token`.
 
+Pozor na realny format: pokud ma lokalne vlozeny `bearerToken` jen jednu cast bez tecek a neprojde EVE `/v2/oauth/verify`, neni to pouzitelny access token pro backend volani.
+
 ## Kde Se Bere Token
 
 Logika je v `ZAMEK/SCRIPTS/Personal.gs`:
@@ -98,8 +100,17 @@ Ten ma vratit aspon:
 - `branch`
 - `dirty`
 - `source`
+- `schedulerEnabled`
+- `schedulerRunning`
 
 Pouziti: pred testovanim nejdriv zkontrolovat `GET /api/version` a az potom resit, jestli je chyba opravdu v aktualne nasazene verzi.
+
+Pro activity je dulezite hlavne:
+
+- `schedulerEnabled=false` znamena, ze backend interni cron vubec nema bezet
+- `schedulerRunning=false` znamena, ze scheduler objekt v procesu nebezi
+
+Launcher self-update detail: `launcher.py` je kratky watchdog skript spousteny z planovace, ne permanentni daemon. Kdyz sam pri behu udela `git pull`, novy kod launcheru se projevi az pri dalsim spusteni launcheru planovacem. Backend se ale po pullu startuje ze souboru na disku po update; launcher po pullu znovu nacita config, aby backend nestartoval se starou konfiguraci nactenou pred pullem.
 
 ## Lokalni Helper V Repu
 
@@ -108,6 +119,12 @@ Pro lokalni volani bez Google Sheets je v repu pripraveno:
 - `tools/activity_api.local.json` - lokalni ignorovany config se secrety
 - `tools/activity_api.example.json` - sablona configu bez secretu
 - `tools/call_activity_api.py` - jednoduchy lokalni caller
+
+Helper umi pouzit i refresh flow. Kdyz je `bearerToken` neplatny nebo expirovany, muze si ziskat novy access token z:
+
+- `refreshToken`
+- `eveClientId`
+- `eveClientSecret`
 
 Obsah `tools/activity_api.local.json`:
 
