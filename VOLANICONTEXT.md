@@ -83,6 +83,24 @@ https://www.spacehamsters.eu/api/corporation/98652228/activity/sync
 https://www.spacehamsters.eu/api/corporation/98652228/activity/report/2026/5
 ```
 
+## Endpoint Pro Overeni Bezi Ci Verze
+
+Backend ma mit jednoduchy diagnosticky endpoint:
+
+```text
+GET /api/version
+```
+
+Ten ma vratit aspon:
+
+- `commit`
+- `shortCommit`
+- `branch`
+- `dirty`
+- `source`
+
+Pouziti: pred testovanim nejdriv zkontrolovat `GET /api/version` a az potom resit, jestli je chyba opravdu v aktualne nasazene verzi.
+
 ## Lokalni Helper V Repu
 
 Pro lokalni volani bez Google Sheets je v repu pripraveno:

@@ -12,6 +12,26 @@ def _set_auth(app, monkeypatch: pytest.MonkeyPatch, *, user_token: str = "user",
     monkeypatch.setattr(app.state.user_info, "get_ceo_access_token", get_ceo_access_token)
 
 
+def test_version_route_returns_runtime_version(app_client) -> None:
+    app_client.app.state.version_info = {
+        "source": "git",
+        "commit": "abcdef1234567890",
+        "shortCommit": "abcdef1",
+        "branch": "main",
+        "dirty": False,
+    }
+
+    resp = app_client.get("/api/version")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "source": "git",
+        "commit": "abcdef1234567890",
+        "shortCommit": "abcdef1",
+        "branch": "main",
+        "dirty": False,
+    }
+
+
 def test_blueprints_id_calculate_missing_amount(app_client) -> None:
     resp = app_client.post("/api/blueprints/123/calculate", json={})
     assert resp.status_code == 200

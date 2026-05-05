@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -23,6 +25,38 @@ from .services.wallet_transactions import WalletTransactionsService
 from .settings import get_settings
 
 
+def _read_runtime_version() -> dict[str, str | bool]:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    def _git(*args: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(repo_root), *args],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+
+    try:
+        commit = _git("rev-parse", "HEAD")
+        short_commit = _git("rev-parse", "--short", "HEAD")
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+        dirty = bool(_git("status", "--porcelain"))
+        return {
+            "source": "git",
+            "commit": commit,
+            "shortCommit": short_commit,
+            "branch": branch,
+            "dirty": dirty,
+        }
+    except Exception:
+        return {
+            "source": "unknown",
+            "commit": "unknown",
+            "shortCommit": "unknown",
+            "branch": "unknown",
+            "dirty": False,
+        }
+
+
 def create_app() -> Starlette:
     settings = get_settings()
     esi = ESIClient(settings.eve_api_base)
@@ -32,6 +66,7 @@ def create_app() -> Starlette:
     jobs_service = JobsService(esi)
     wallet_journal_service = WalletJournalService(esi)
     wallet_transactions_service = WalletTransactionsService(esi)
+    version_info = _read_runtime_version()
 
     @asynccontextmanager
     async def lifespan(app: Starlette):
@@ -42,6 +77,7 @@ def create_app() -> Starlette:
         app.state.jobs_service = jobs_service
         app.state.wallet_journal_service = wallet_journal_service
         app.state.wallet_transactions_service = wallet_transactions_service
+        app.state.version_info = version_info
         app.state.scheduler = None
 
         await db.init_pool()
@@ -107,6 +143,9 @@ def create_app() -> Starlette:
                 app.state.scheduler.shutdown(wait=False)
             await esi.close()
             await db.close_pool()
+
+    async def get_version(request: Request) -> Response:
+        return JSONResponse(request.app.state.version_info)
 
     async def post_user_info(request: Request) -> Response:
         log(2, "POST /api/userInfo")
@@ -539,6 +578,7 @@ def create_app() -> Starlette:
             log(1, f"GET /api/corporation/{corporation_id}/wallet/{wallet}/transactions/velocity finished")
 
     routes = [
+        Route("/api/version", get_version, methods=["GET"]),
         Route("/api/userInfo", post_user_info, methods=["POST"]),
         Route("/api/blueprints/calculate", post_blueprints_calculate, methods=["POST"]),
         Route("/api/blueprints/{type_id:int}/calculate", post_blueprints_id_calculate, methods=["POST"]),
