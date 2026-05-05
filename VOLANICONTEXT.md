@@ -110,6 +110,13 @@ Pro activity je dulezite hlavne:
 - `schedulerEnabled=false` znamena, ze backend interni cron vubec nema bezet
 - `schedulerRunning=false` znamena, ze scheduler objekt v procesu nebezi
 
+Overeny produkcni stav 2026-05-05 po nasazeni commitu `5ce55ec`:
+
+- `/api/version` vracel `schedulerEnabled=false`
+- `/api/version` vracel `schedulerRunning=false`
+
+To znamena, ze i kdyz se na serveru zmeni `launcher_config.json`, bez skutecneho restartu backendu nebo bez toho, aby se novy config propsal do beziciho procesu, muze produkce stale bezel bez scheduleru.
+
 Launcher self-update detail: `launcher.py` je kratky watchdog skript spousteny z planovace, ne permanentni daemon. Kdyz sam pri behu udela `git pull`, novy kod launcheru se projevi az pri dalsim spusteni launcheru planovacem. Backend se ale po pullu startuje ze souboru na disku po update; launcher po pullu znovu nacita config, aby backend nestartoval se starou konfiguraci nactenou pred pullem.
 
 ## Lokalni Helper V Repu
