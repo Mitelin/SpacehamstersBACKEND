@@ -246,6 +246,21 @@ async def test_activity_report_uses_interval_minutes_when_monthly_is_stale(monke
                     "startDate": datetime(2024, 1, 15, 12, 0),
                     "snapshotCount": 2,
                     "lastSnapshotAt": datetime(2026, 5, 3, 11, 0),
+                },
+                {
+                    "characterId": 12,
+                    "characterName": "Pilot F",
+                    "activeDaysMask": 1 << 1,
+                    "estimatedMinutes": 600,
+                    "status": "offline",
+                    "lastLogin": datetime(2026, 5, 2, 8, 0),
+                    "lastLogout": datetime(2026, 5, 2, 18, 0),
+                    "locationId": 6008,
+                    "shipTypeId": 118,
+                    "shipName": "Cerberus",
+                    "startDate": datetime(2024, 1, 15, 12, 0),
+                    "snapshotCount": 1,
+                    "lastSnapshotAt": datetime(2026, 5, 2, 18, 0),
                 }
             ]
         if "FROM corpActivityIntervals" in sql:
@@ -292,9 +307,11 @@ async def test_activity_report_uses_interval_minutes_when_monthly_is_stale(monke
 
     await esi.close()
 
-    assert report["summary"][0]["estimatedMinutes"] == 180
-    assert report["summary"][0]["estimatedHours"] == 3.0
-    assert report["summary"][0]["activeDays"] == 1
+    by_character_id = {item["characterId"]: item for item in report["summary"]}
+    assert by_character_id[11]["estimatedMinutes"] == 180
+    assert by_character_id[11]["estimatedHours"] == 3.0
+    assert by_character_id[11]["activeDays"] == 1
+    assert by_character_id[12]["estimatedMinutes"] == 600
 
 
 @pytest.mark.asyncio

@@ -912,6 +912,73 @@ class ActivityService:
             },
         }
 
+    def _merge_monthly_interval_reports(
+        self,
+        monthly_report: dict[str, Any],
+        interval_report: dict[str, Any] | None,
+        year: int,
+        month: int,
+    ) -> dict[str, Any]:
+        if interval_report is None:
+            return monthly_report
+
+        y = int(year)
+        m = int(month)
+        monthly_by_character = {
+            int(item.get("characterId") or 0): item
+            for item in monthly_report.get("summary", [])
+            if int(item.get("characterId") or 0)
+        }
+        interval_by_character = {
+            int(item.get("characterId") or 0): item
+            for item in interval_report.get("summary", [])
+            if int(item.get("characterId") or 0)
+        }
+
+        summary: list[dict[str, Any]] = []
+        for character_id in sorted(set(monthly_by_character) | set(interval_by_character)):
+            monthly_item = monthly_by_character.get(character_id)
+            interval_item = interval_by_character.get(character_id)
+            if monthly_item is None:
+                if interval_item is not None:
+                    summary.append(interval_item)
+                continue
+            if interval_item is None:
+                summary.append(monthly_item)
+                continue
+
+            monthly_minutes = int(monthly_item.get("estimatedMinutes") or 0)
+            interval_minutes = int(interval_item.get("estimatedMinutes") or 0)
+            summary.append(interval_item if interval_minutes > monthly_minutes else monthly_item)
+
+        latest_snapshot: datetime | None = None
+        snapshot_count = 0
+        for item in summary:
+            snapshot_count += int(item.get("snapshotCount") or 0)
+            item_snapshot = _parse_dt(item.get("lastSnapshotAt"))
+            if item_snapshot and (latest_snapshot is None or item_snapshot > latest_snapshot):
+                latest_snapshot = item_snapshot
+
+        summary.sort(
+            key=lambda item: (
+                -int(item.get("activeDays") or 0),
+                -float(item.get("estimatedHours") or 0),
+                str(item.get("characterName") or ""),
+            )
+        )
+
+        return {
+            "summary": _jsonable_rows(summary),
+            "meta": {
+                "year": y,
+                "month": m,
+                "pilotCount": len(summary),
+                "snapshotCount": snapshot_count,
+                "latestSnapshotAt": _jsonable_value(latest_snapshot),
+                "monthKey": f"{y:04d}-{m:02d}",
+            },
+        }
+
     async def get_report(self, year: int, month: int) -> dict[str, Any]:
         y = int(year)
         m = int(month)
@@ -923,13 +990,7 @@ class ActivityService:
         monthly_report = await self._get_report_from_monthly(y, m)
         if monthly_report is not None:
             interval_report = self._build_report_from_intervals(await self._fetch_interval_month_rows(y, m), y, m)
-            if interval_report is None:
-                return monthly_report
-            monthly_minutes = sum(int(item.get("estimatedMinutes") or 0) for item in monthly_report["summary"])
-            interval_minutes = sum(int(item.get("estimatedMinutes") or 0) for item in interval_report["summary"])
-            if interval_minutes > monthly_minutes:
-                return interval_report
-            return monthly_report
+            return self._merge_monthly_interval_reports(monthly_report, interval_report, y, m)
 
         report = _build_report_from_rows(await self._fetch_raw_month_rows(y, m), y, m)
         return {
