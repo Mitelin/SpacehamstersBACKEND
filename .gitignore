@@ -26,10 +26,12 @@ logs/
 # Configs
 # Never commit filled local config (likely contains passwords/tokens).
 launcher_config.json
+tools/activity_api.local.json
 
 # Track templates/examples.
 !launcher_config.example.json
 !launcher_config.linux.example.json
+!tools/activity_api.example.json
 
 # Local env (keep .env.example tracked)
 .env
