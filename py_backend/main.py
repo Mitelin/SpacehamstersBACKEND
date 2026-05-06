@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -80,8 +81,17 @@ def create_app() -> Starlette:
         app.state.version_info = version_info
         app.state.scheduler_enabled = int(settings.enable_scheduler)
         app.state.scheduler = None
+        app.state.activity_scheduler_job = None
 
         await db.init_pool()
+        app.state.activity_scheduler_status = {
+            "running": False,
+            "lastStartedAt": None,
+            "lastFinishedAt": None,
+            "lastSuccessAt": None,
+            "lastResultCount": None,
+            "lastError": None,
+        }
 
         if int(settings.enable_scheduler) == 1:
             scheduler = AsyncIOScheduler(timezone="UTC")
@@ -118,13 +128,23 @@ def create_app() -> Starlette:
                     log(3, f"cron() walletTransactions.sync Error: {exc}")
 
             async def _activity_sync() -> None:
+                status = app.state.activity_scheduler_status
+                status["running"] = True
+                status["lastStartedAt"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
+                status["lastError"] = None
                 try:
                     log(2, "cron() activity.sync")
                     access_token = await user_info.get_ceo_access_token()
                     cnt = await activity_service.sync(settings.corporation_id, access_token)
+                    status["lastSuccessAt"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
+                    status["lastResultCount"] = cnt
                     log(1, f"Records synchronized: {cnt}")
                 except Exception as exc:
+                    status["lastError"] = str(exc)
                     log(3, f"cron() activity.sync Error: {exc}")
+                finally:
+                    status["running"] = False
+                    status["lastFinishedAt"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
 
             def _run(coro):
                 asyncio.create_task(coro())
@@ -133,7 +153,10 @@ def create_app() -> Starlette:
             scheduler.add_job(lambda: _run(_wallet_sync), CronTrigger(hour=4, minute=15))
             scheduler.add_job(lambda: _run(_wallet_transactions_sync), CronTrigger(hour=4, minute=30))
             activity_hours = ",".join(str(hour) for hour in range(24))
-            scheduler.add_job(lambda: _run(_activity_sync), CronTrigger(hour=activity_hours, minute=45))
+            app.state.activity_scheduler_job = scheduler.add_job(
+                lambda: _run(_activity_sync),
+                CronTrigger(hour=activity_hours, minute=45),
+            )
             scheduler.start()
             app.state.scheduler = scheduler
 
@@ -149,6 +172,13 @@ def create_app() -> Starlette:
         payload = dict(request.app.state.version_info)
         payload["schedulerEnabled"] = bool(getattr(request.app.state, "scheduler_enabled", 0))
         payload["schedulerRunning"] = bool(getattr(request.app.state, "scheduler", None))
+        payload["activityScheduler"] = dict(getattr(request.app.state, "activity_scheduler_status", {}) or {})
+        activity_job = getattr(request.app.state, "activity_scheduler_job", None)
+        payload["nextActivityRunAt"] = (
+            activity_job.next_run_time.replace(tzinfo=None).isoformat(sep=" ")
+            if activity_job and activity_job.next_run_time
+            else None
+        )
         return JSONResponse(payload)
 
     async def post_user_info(request: Request) -> Response:

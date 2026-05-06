@@ -37,6 +37,15 @@ def test_version_route_returns_runtime_version(app_client) -> None:
         "dirty": False,
         "schedulerEnabled": True,
         "schedulerRunning": True,
+        "activityScheduler": {
+            "running": False,
+            "lastStartedAt": None,
+            "lastFinishedAt": None,
+            "lastSuccessAt": None,
+            "lastResultCount": None,
+            "lastError": None,
+        },
+        "nextActivityRunAt": None,
     }
 
 
