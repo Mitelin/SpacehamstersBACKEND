@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -68,6 +67,7 @@ def create_app() -> Starlette:
     wallet_journal_service = WalletJournalService(esi)
     wallet_transactions_service = WalletTransactionsService(esi)
     version_info = _read_runtime_version()
+    process_started_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
 
     @asynccontextmanager
     async def lifespan(app: Starlette):
@@ -79,6 +79,7 @@ def create_app() -> Starlette:
         app.state.wallet_journal_service = wallet_journal_service
         app.state.wallet_transactions_service = wallet_transactions_service
         app.state.version_info = version_info
+        app.state.process_started_at = process_started_at
         app.state.scheduler_enabled = int(settings.enable_scheduler)
         app.state.scheduler = None
         app.state.activity_scheduler_job = None
@@ -146,15 +147,12 @@ def create_app() -> Starlette:
                     status["running"] = False
                     status["lastFinishedAt"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
 
-            def _run(coro):
-                asyncio.create_task(coro())
-
-            scheduler.add_job(lambda: _run(_jobs_sync), CronTrigger(hour=4, minute=0))
-            scheduler.add_job(lambda: _run(_wallet_sync), CronTrigger(hour=4, minute=15))
-            scheduler.add_job(lambda: _run(_wallet_transactions_sync), CronTrigger(hour=4, minute=30))
+            scheduler.add_job(_jobs_sync, CronTrigger(hour=4, minute=0))
+            scheduler.add_job(_wallet_sync, CronTrigger(hour=4, minute=15))
+            scheduler.add_job(_wallet_transactions_sync, CronTrigger(hour=4, minute=30))
             activity_hours = ",".join(str(hour) for hour in range(24))
             app.state.activity_scheduler_job = scheduler.add_job(
-                lambda: _run(_activity_sync),
+                _activity_sync,
                 CronTrigger(hour=activity_hours, minute=45),
             )
             scheduler.start()
@@ -170,6 +168,7 @@ def create_app() -> Starlette:
 
     async def get_version(request: Request) -> Response:
         payload = dict(request.app.state.version_info)
+        payload["processStartedAt"] = getattr(request.app.state, "process_started_at", None)
         payload["schedulerEnabled"] = bool(getattr(request.app.state, "scheduler_enabled", 0))
         payload["schedulerRunning"] = bool(getattr(request.app.state, "scheduler", None))
         payload["activityScheduler"] = dict(getattr(request.app.state, "activity_scheduler_status", {}) or {})

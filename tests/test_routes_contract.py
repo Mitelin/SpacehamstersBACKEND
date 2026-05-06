@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 
 
@@ -24,6 +26,7 @@ def test_version_route_returns_runtime_version(app_client) -> None:
         "branch": "main",
         "dirty": False,
     }
+    app_client.app.state.process_started_at = "2026-05-06 13:00:00"
     app_client.app.state.scheduler_enabled = 1
     app_client.app.state.scheduler = _FakeRunningScheduler()
 
@@ -35,6 +38,7 @@ def test_version_route_returns_runtime_version(app_client) -> None:
         "shortCommit": "abcdef1",
         "branch": "main",
         "dirty": False,
+        "processStartedAt": "2026-05-06 13:00:00",
         "schedulerEnabled": True,
         "schedulerRunning": True,
         "activityScheduler": {
@@ -234,7 +238,8 @@ def test_scheduler_includes_wallet_transactions_sync(monkeypatch: pytest.MonkeyP
             self.shutdown_called = False
 
         def add_job(self, func, trigger):
-            self.jobs.append(trigger)
+            self.jobs.append((func, trigger))
+            return type("FakeJob", (), {"next_run_time": None})()
 
         def start(self):
             self.started = True
@@ -256,7 +261,8 @@ def test_scheduler_includes_wallet_transactions_sync(monkeypatch: pytest.MonkeyP
         assert scheduler.timezone == "UTC"
 
         scheduled_times = []
-        for trigger in scheduler.jobs:
+        for func, trigger in scheduler.jobs:
+            assert inspect.iscoroutinefunction(func)
             hours = [expr.first for expr in trigger.fields[5].expressions]
             minutes = [expr.first for expr in trigger.fields[6].expressions]
             scheduled_times.extend((hour, minutes[0]) for hour in hours)
