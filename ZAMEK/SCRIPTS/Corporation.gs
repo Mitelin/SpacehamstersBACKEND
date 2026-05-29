@@ -92,6 +92,7 @@ const Corporation = (()=>{
     jobs: null,
     blueprints: null,
     bpos: null,
+    hangarsByTypeName: null,
   };
 
   // When true, reuse in-memory memo for the rest of the execution,
@@ -104,10 +105,49 @@ const Corporation = (()=>{
     _cacheMemo.jobs = null;
     _cacheMemo.blueprints = null;
     _cacheMemo.bpos = null;
+    _cacheMemo.hangarsByTypeName = null;
   }
 
   var _setFreezeMemo = function(on) {
     _freezeMemo = on ? true : false;
+  }
+
+  var _countRowsByFirstColumn = function(rows) {
+    if (!rows || !rows.length) return 0;
+    let count = 0;
+    while (count < rows.length && rows[count] && rows[count][0]) count++;
+    return count;
+  }
+
+  var _cacheTimeMs = function(value) {
+    if (value === null || typeof value === 'undefined' || value === '') return 0;
+    if (value instanceof Date) return value.getTime();
+    var numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+    var parsed = Date.parse(value);
+    return isNaN(parsed) ? 0 : parsed;
+  }
+
+  var _sameCacheLastModified = function(previousValue, nextValue) {
+    var previousMs = _cacheTimeMs(previousValue);
+    var nextMs = _cacheTimeMs(nextValue);
+    return previousMs > 0 && nextMs > 0 && previousMs === nextMs;
+  }
+
+  var _ensureSheetColumns = function(sheet, minColumns) {
+    if (!sheet || !minColumns) return;
+    var currentColumns = sheet.getMaxColumns();
+    if (currentColumns < minColumns) {
+      sheet.insertColumnsAfter(currentColumns, minColumns - currentColumns);
+    }
+  }
+
+  var _rowsToReadFromCacheSheet = function(sheet, declaredRowCount) {
+    if (!sheet) return 0;
+    var availableRows = Math.max(0, sheet.getLastRow() - 1);
+    var wantedRows = Number(declaredRowCount) || 0;
+    if (wantedRows <= 0) return availableRows;
+    return Math.min(wantedRows, availableRows);
   }
 
   var ACTIVITY_SUMMARY_START_ROW = 6;
@@ -390,13 +430,15 @@ const Corporation = (()=>{
   /* Returns initialized reaction hangars id-name map */
   var getHangarsRMap = function() {
     if (!hangarsRMap) {
+      _ensureSheetColumns(hangarsSheet, 31);
       // load hangars from spreadsheet
       trace('### Loading R Hangars ...')
       var lastRow = hangarsSheet.getLastRow();
+      var rowCount = Math.max(0, lastRow - 2);
 
-      if (lastRow > 1) {
+      if (rowCount > 0) {
         // create map from the sheet contents
-        let hangars = hangarsSheet.getRange(3, 8, lastRow - 1, 6).getValues();
+        let hangars = hangarsSheet.getRange(3, 8, rowCount, 6).getValues();
 
         hangarsRMap = new Map(hangars.map(obj =>
             [obj[0], obj[5]]
@@ -416,13 +458,15 @@ const Corporation = (()=>{
   /* Returns initialized manufacturing hangars id-name map */
   var getHangarsMMap = function() {
     if (!hangarsMMap) {
+      _ensureSheetColumns(hangarsSheet, 31);
       // load hangars from spreadsheet
       trace('### Loading M Hangars ...')
       var lastRow = hangarsSheet.getLastRow();
+      var rowCount = Math.max(0, lastRow - 2);
 
-      if (lastRow > 1) {
+      if (rowCount > 0) {
         // create map from the sheet contents
-        let hangars = hangarsSheet.getRange(3, 1, lastRow - 1, 6).getValues();
+        let hangars = hangarsSheet.getRange(3, 1, rowCount, 6).getValues();
 
         hangarsMMap = new Map(hangars.map(obj =>
             [obj[0], obj[5]]
@@ -438,13 +482,15 @@ const Corporation = (()=>{
   /* Returns initialized research hangars id-name map */
   var getHangarsResMap = function() {
     if (!hangarsResMap) {
+      _ensureSheetColumns(hangarsSheet, 31);
       // load hangars from spreadsheet
       trace('### Loading Res Hangars ...')
       var lastRow = hangarsSheet.getLastRow();
+      var rowCount = Math.max(0, lastRow - 2);
 
-      if (lastRow > 1) {
+      if (rowCount > 0) {
         // create map from the sheet contents
-        let hangars = hangarsSheet.getRange(3, 15, lastRow - 1, 6).getValues();
+        let hangars = hangarsSheet.getRange(3, 15, rowCount, 6).getValues();
 
         hangarsResMap = new Map(hangars.map(obj =>
             [obj[0], obj[5]]
@@ -460,13 +506,15 @@ const Corporation = (()=>{
   /* Returns initialized research hangars id-name map */
   var getHangarsCapMap = function() {
     if (!hangarsCapMap) {
+      _ensureSheetColumns(hangarsSheet, 31);
       // load hangars from spreadsheet
       trace('### Loading Cap Hangars ...')
       var lastRow = hangarsSheet.getLastRow();
+      var rowCount = Math.max(0, lastRow - 2);
 
-      if (lastRow > 1) {
+      if (rowCount > 0) {
         // create map from the sheet contents
-        let hangars = hangarsSheet.getRange(3, 22, lastRow - 1, 6).getValues();
+        let hangars = hangarsSheet.getRange(3, 22, rowCount, 6).getValues();
 
         hangarsCapMap = new Map(hangars.map(obj =>
             [obj[0], obj[5]]
@@ -478,6 +526,45 @@ const Corporation = (()=>{
     }
     return hangarsCapMap;
   }   
+
+  var _hangarMemoKey = function(type, name) {
+    return String(type || '') + '|' + String(name || '');
+  }
+
+  var _hangarFromRow = function(row) {
+    if (!row || row[5] === '' || row[5] == null) return null;
+    return {
+      locationID: row[0],
+      locationType: row[1],
+      locationFlag: row[2],
+    };
+  }
+
+  var _addHangarRowsToMemo = function(memo, type, rows) {
+    rows.forEach(row => {
+      const hangar = _hangarFromRow(row);
+      if (!hangar) return;
+      memo.set(_hangarMemoKey(type, row[5]), hangar);
+    });
+  }
+
+  var _getHangarsByTypeNameMemo = function() {
+    if (_cacheMemo.hangarsByTypeName) return _cacheMemo.hangarsByTypeName;
+
+    _ensureSheetColumns(hangarsSheet, 31);
+    const memo = new Map();
+    const lastRow = hangarsSheet.getLastRow();
+    if (lastRow > 2) {
+      const rowCount = lastRow - 2;
+      _addHangarRowsToMemo(memo, 'Manufactoring', hangarsSheet.getRange(3, 1, rowCount, 6).getValues());
+      _addHangarRowsToMemo(memo, 'Reaction', hangarsSheet.getRange(3, 8, rowCount, 6).getValues());
+      _addHangarRowsToMemo(memo, 'Research', hangarsSheet.getRange(3, 15, rowCount, 6).getValues());
+      _addHangarRowsToMemo(memo, 'Capital', hangarsSheet.getRange(3, 22, rowCount, 6).getValues());
+    }
+
+    _cacheMemo.hangarsByTypeName = memo;
+    return memo;
+  }
 
   return {
     /* Returns corporation ID */
@@ -1067,28 +1154,7 @@ const Corporation = (()=>{
     * Helper function - finds hangar details for a hangar of specified type and name
     */
     getHangarByName (type, name) {
-      var lastRow = hangarsSheet.getLastRow();
-      var hangarArray;
-      var hangar;
-
-      // read data from sheet to array
-      if (type == 'Research') hangarArray = hangarsSheet.getRange(3, 15, lastRow, 6).getValues();
-      else if (type == 'Reaction') hangarArray = hangarsSheet.getRange(3, 8, lastRow, 6).getValues();
-      else if (type == 'Capital') hangarArray = hangarsSheet.getRange(3, 22, lastRow, 6).getValues();
-      else hangarArray = hangarsSheet.getRange(3, 1, lastRow, 6).getValues();
-
-      // look for hangar in the array of hangars by name
-      hangar = hangarArray.find(element => element[5] == name)
-
-      // empty row means hangar not found
-      if (!hangar) return null;
-
-      var ret = {}
-      ret.locationID = hangar[0];
-      ret.locationType = hangar[1];
-      ret.locationFlag = hangar[2];
-      
-      return ret;
+      return _getHangarsByTypeNameMemo().get(_hangarMemoKey(type, name)) || null;
     },
 
     /*
@@ -1221,26 +1287,42 @@ const Corporation = (()=>{
     * Updates corporate hangars sheet
     */
     syncHangars: function() {
+      _cacheMemo.hangarsByTypeName = null;
+      hangarsRMap = null;
+      hangarsMMap = null;
+      hangarsResMap = null;
+      hangarsCapMap = null;
+      _ensureSheetColumns(hangarsSheet, 31);
 
       // smaz data
       var lastRow = hangarsSheet.getLastRow();
-      var range = hangarsSheet.getRange(3, 1, lastRow, 31);
-      range.clearContent();
+      var clearRows = Math.max(0, lastRow - 2);
+      var range;
+      if (clearRows > 0) {
+        range = hangarsSheet.getRange(3, 1, clearRows, 31);
+        range.clearContent();
+      }
 
       var hangar = Corporation.getStructureHangars(Corporation.getManufacturingStructure().structure_id);
       var rows = hangar.map(a => [a.locationId, a.locationType, a.locationFlag, a.hangar, a.container, a.hangar + (a.container ? " - " + a.container : "")]);
-      range = hangarsSheet.getRange(3, 1, rows.length, 6);
-      range.setValues(rows);
+      if (rows.length > 0) {
+        range = hangarsSheet.getRange(3, 1, rows.length, 6);
+        range.setValues(rows);
+      }
 
       hangar = Corporation.getStructureHangars(Corporation.getReactionStructure().structure_id);
       rows = hangar.map(a => [a.locationId, a.locationType, a.locationFlag, a.hangar, a.container, a.hangar + (a.container ? " - " + a.container : "")]);
-      range = hangarsSheet.getRange(3, 8, rows.length, 6);
-      range.setValues(rows);
+      if (rows.length > 0) {
+        range = hangarsSheet.getRange(3, 8, rows.length, 6);
+        range.setValues(rows);
+      }
 
       hangar = Corporation.getStructureHangars(Corporation.getResearchStructure().structure_id);
       rows = hangar.map(a => [a.locationId, a.locationType, a.locationFlag, a.hangar, a.container, a.hangar + (a.container ? " - " + a.container : "")]);
-      range = hangarsSheet.getRange(3, 15, rows  .length, 6);
-      range.setValues(rows);
+      if (rows.length > 0) {
+        range = hangarsSheet.getRange(3, 15, rows.length, 6);
+        range.setValues(rows);
+      }
 
       hangar = Corporation.getStructureHangars(Corporation.getCapitalStructure().structure_id);
       rows = hangar.map(a => [a.locationId, a.locationType, a.locationFlag, a.hangar, a.container, a.hangar + (a.container ? " - " + a.container : "")]);
@@ -1259,30 +1341,48 @@ const Corporation = (()=>{
     syncAssets: function() {
       // underlying sheet will be rewritten -> invalidate memo
       _cacheMemo.assets = null;
+      _ensureSheetColumns(assetsSheet, 12);
 
-      // clear the sheet contents
-      var lastRow = assetsSheet.getLastRow();
+      var previousLastModified = assetsSheet.getRange(1, 9, 1, 1).getValue();
+      var previousDataRows = Math.max(0, assetsSheet.getLastRow() - 1);
       var range;
-      if (lastRow > 1) {
-        range = assetsSheet.getRange(2, 1, lastRow - 1, 12);
-        range.clearContent();
-      }
 
-      var assets = Corporation.getAssets();
+      var assets = _time('syncAssets fetch ESI assets', () => Corporation.getAssets());
 
       let modified = new Date(assets.lastModified);
       trace("Modified " + modified + "(" + assets.lastModified + ")" + " exp " + assets.expires);
 
-      // log cache date info
-      range = assetsSheet.getRange(1, 8, 1, 3);
-      range.setValues([[modified, assets.lastModified, assets.expires]]);
-
       // filter only items in a hangar
-      assetsFiltered = assets.data.filter(item => item.hangar != null);
+      var assetsFiltered = assets.data.filter(item => item.hangar != null);
       var rows = assetsFiltered.map(a => [a.locationId, a.locationType, a.locationFlag, a.hangar, a.typeId, a.typeName, a.quantity]);
+      assets.data = assetsFiltered;
 
-      range = assetsSheet.getRange(2, 1, rows.length, 7);
-      range.setValues(rows);
+      // log cache date info
+      range = assetsSheet.getRange(1, 8, 1, 4);
+      range.setValues([[modified, assets.lastModified, assets.expires, rows.length]]);
+
+      if (previousDataRows > 0 && _sameCacheLastModified(previousLastModified, assets.lastModified)) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('syncAssets sheet unchanged, skipped rewrite');
+        _cacheMemo.assets = assets;
+        return assets;
+      }
+
+      _time('syncAssets clear sheet', () => {
+        var lastRow = assetsSheet.getLastRow();
+        if (lastRow > 1) {
+          range = assetsSheet.getRange(2, 1, lastRow - 1, 12);
+          range.clearContent();
+        }
+      });
+
+      _time('syncAssets write sheet', () => {
+        if (rows.length <= 0) return;
+        range = assetsSheet.getRange(2, 1, rows.length, 7);
+        range.setValues(rows);
+      });
+
+      _cacheMemo.assets = assets;
+      return assets;
     },
 
     /*
@@ -1290,7 +1390,10 @@ const Corporation = (()=>{
      * if data stored in sheet have expoired cache, re-sync sheet
      */ 
     loadAssets: function() {
+      _ensureSheetColumns(assetsSheet, 12);
+
       if (_cacheMemo.assets && _freezeMemo) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadAssets: memo frozen hit');
         if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo && _cacheMemo.assets.expires) {
           Sidebar.setCacheInfo({ assetsExpiresMs: Number(_cacheMemo.assets.expires) });
         }
@@ -1299,6 +1402,7 @@ const Corporation = (()=>{
 
       // If runtime is warm and memo is present, only reuse it while it is still valid.
       if (_cacheMemo.assets && _cacheMemo.assets.expires && (new Date().getTime() <= _cacheMemo.assets.expires)) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadAssets: memo valid hit');
         if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
           Sidebar.setCacheInfo({ assetsExpiresMs: Number(_cacheMemo.assets.expires) });
         }
@@ -1310,8 +1414,13 @@ const Corporation = (()=>{
       let date = new Date().getTime()
       var assets = {};
       assets.data = [];
-      assets.lastModified = assetsSheet.getRange(1,9,1,1).getValue();
-      assets.expires = assetsSheet.getRange(1,10,1,1).getValue();
+      var assetsMeta;
+      _time('loadAssets read metadata', () => {
+        assetsMeta = assetsSheet.getRange(1, 9, 1, 3).getValues()[0];
+      });
+      assets.lastModified = assetsMeta[0];
+      assets.expires = assetsMeta[1];
+      assets.rowCount = Number(assetsMeta[2]) || 0;
       assets.age = Math.trunc((date - assets.lastModified) / 1000);
       assets.cacheRefresh = Math.trunc((assets.expires - date) / 1000);
 
@@ -1321,11 +1430,24 @@ const Corporation = (()=>{
 
       // check if asset cache is expired and refresh it
       if (new Date().getTime() > assets.expires) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadAssets: sheet cache expired, syncing');
         Sidebar.add("Aktualizuju cache skladu");
-        this.syncAssets();
+        var syncedAssets = _time('syncAssets total', () => this.syncAssets());
+        if (syncedAssets) {
+          if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo && syncedAssets.expires) {
+            Sidebar.setCacheInfo({ assetsExpiresMs: Number(syncedAssets.expires) });
+          }
+          return syncedAssets;
+        }
+
         date = new Date().getTime();
-        assets.lastModified = assetsSheet.getRange(1,9,1,1).getValue();
-        assets.expires = assetsSheet.getRange(1,10,1,1).getValue();
+        var refreshedMeta;
+        _time('loadAssets reread metadata', () => {
+          refreshedMeta = assetsSheet.getRange(1, 9, 1, 3).getValues()[0];
+        });
+        assets.lastModified = refreshedMeta[0];
+        assets.expires = refreshedMeta[1];
+        assets.rowCount = Number(refreshedMeta[2]) || 0;
         assets.age = Math.trunc((date - assets.lastModified) / 1000);
         assets.cacheRefresh = Math.trunc((assets.expires - date) / 1000);
 
@@ -1333,23 +1455,35 @@ const Corporation = (()=>{
           Sidebar.setCacheInfo({ assetsExpiresMs: Number(assets.expires) });
         }
       } else {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadAssets: sheet cache valid');
         Sidebar.add("Cache skladu je platná do " + new Date(assets.expires));
       }
 
-      var lastRow = assetsSheet.getLastRow();
-      if (lastRow > 1) {
-        // load assets from sheet from the sheet contents
-        let assetsArray = assetsSheet.getRange(2, 1, lastRow - 1, 7).getValues();
+      var rowsToRead = _rowsToReadFromCacheSheet(assetsSheet, assets.rowCount);
+      if (rowsToRead > 0) {
+        var assetsArray;
+        _time('loadAssets read sheet rows', () => {
+          assetsArray = assetsSheet.getRange(2, 1, rowsToRead, 7).getValues();
+        });
 
-        assets.data = assetsArray.map (a => ({
-          locationId : a[0],
-          locationType : a[1],
-          locationFlag : a[2],
-          hangar : a[3],
-          typeId : a[4],
-          typeName : a[5],
-          quantity : a[6]
-        }));
+        if (!assets.rowCount) {
+          assets.rowCount = _countRowsByFirstColumn(assetsArray);
+          try { assetsSheet.getRange(1, 11, 1, 1).setValue(assets.rowCount); } catch (e) {}
+        } else if (assets.rowCount > rowsToRead) {
+          assets.rowCount = rowsToRead;
+        }
+
+        _time('loadAssets map rows', () => {
+          assets.data = assetsArray.slice(0, assets.rowCount || assetsArray.length).map (a => ({
+            locationId : a[0],
+            locationType : a[1],
+            locationFlag : a[2],
+            hangar : a[3],
+            typeId : a[4],
+            typeName : a[5],
+            quantity : a[6]
+          }));
+        });
 
 //        console.log(assets);
 
@@ -1369,24 +1503,15 @@ const Corporation = (()=>{
 
       // underlying sheet will be rewritten -> invalidate memo
       _cacheMemo.jobs = null;
-
-      // clean insustry jobs sheet
-      _time('syncJobs clear sheet', () => {
-        var lastRow = industryJobsSheet.getLastRow();
-        if (lastRow > 1) {
-          industryJobsSheet.getRange(2, 1, lastRow - 1, 19).clearContent();
-        }
-      });
+      _ensureSheetColumns(industryJobsSheet, 23);
+      var previousLastModified = industryJobsSheet.getRange(1, 21, 1, 1).getValue();
+      var previousDataRows = Math.max(0, industryJobsSheet.getLastRow() - 1);
 
       // get all running jobs
       var jobs = _time('syncJobs fetch ESI jobs', () => Corporation.getJobs([], true));
 
       let modified = new Date(jobs.lastModified);
       trace("Modified " + modified + "(" + jobs.lastModified + ")" + " exp " + jobs.expires);
-
-      // log cache date info
-      range = industryJobsSheet.getRange(1, 20, 1, 3);
-      range.setValues([[modified, jobs.lastModified, jobs.expires]]);
 
       // store jobs to sheet
       var rows = jobs.data.map(a => [
@@ -1410,7 +1535,27 @@ const Corporation = (()=>{
         a.licensedRuns,
         a.successfulRuns
         ]);
+
+      // log cache date info
+      range = industryJobsSheet.getRange(1, 20, 1, 4);
+      range.setValues([[modified, jobs.lastModified, jobs.expires, rows.length]]);
+
+      if (previousDataRows > 0 && _sameCacheLastModified(previousLastModified, jobs.lastModified)) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('syncJobs sheet unchanged, skipped rewrite');
+        _cacheMemo.jobs = jobs;
+        return jobs;
+      }
+
+      // clean industry jobs sheet
+      _time('syncJobs clear sheet', () => {
+        var lastRow = industryJobsSheet.getLastRow();
+        if (lastRow > 1) {
+          industryJobsSheet.getRange(2, 1, lastRow - 1, 19).clearContent();
+        }
+      });
+
       _time('syncJobs write sheet', () => {
+        if (rows.length <= 0) return;
         range = industryJobsSheet.getRange(2, 1, rows.length, 19);
         range.setValues(rows);
       });
@@ -1432,7 +1577,10 @@ const Corporation = (()=>{
 
     // loads jobs stored in industry sheet
     loadJobs: function() {
+      _ensureSheetColumns(industryJobsSheet, 23);
+
       if (_cacheMemo.jobs && _freezeMemo) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadJobs: memo frozen hit');
         if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo && _cacheMemo.jobs.expires) {
           Sidebar.setCacheInfo({ jobsExpiresMs: Number(_cacheMemo.jobs.expires) });
         }
@@ -1441,6 +1589,7 @@ const Corporation = (()=>{
 
       // If runtime is warm and memo is present, only reuse it while it is still valid.
       if (_cacheMemo.jobs && _cacheMemo.jobs.expires && (new Date().getTime() <= _cacheMemo.jobs.expires)) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadJobs: memo valid hit');
         if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
           Sidebar.setCacheInfo({ jobsExpiresMs: Number(_cacheMemo.jobs.expires) });
         }
@@ -1452,8 +1601,13 @@ const Corporation = (()=>{
       let date = new Date().getTime()
       var jobs = {};
       jobs.data = [];
-      jobs.lastModified = industryJobsSheet.getRange(1,21,1,1).getValue();
-      jobs.expires = industryJobsSheet.getRange(1,22,1,1).getValue();
+      var jobsMeta;
+      _time('loadJobs read metadata', () => {
+        jobsMeta = industryJobsSheet.getRange(1, 21, 1, 3).getValues()[0];
+      });
+      jobs.lastModified = jobsMeta[0];
+      jobs.expires = jobsMeta[1];
+      jobs.rowCount = Number(jobsMeta[2]) || 0;
       jobs.age = Math.trunc((date - jobs.lastModified) / 1000);
       jobs.cacheRefresh = Math.trunc((jobs.expires - date) / 1000);
       trace(jobs);
@@ -1464,6 +1618,7 @@ const Corporation = (()=>{
 
       // check if asset cache is expired and refresh it
       if (date > jobs.expires) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadJobs: sheet cache expired, syncing');
         Sidebar.add("Aktualizuju cache jobů");
         // syncJobs already returns the translated jobs object (and memoizes it)
         var syncedJobs = _time('syncJobs total', () => this.syncJobs());
@@ -1476,8 +1631,13 @@ const Corporation = (()=>{
 
         // Fallback: re-read metadata from sheet (shouldn't normally happen)
         date = new Date().getTime();
-        jobs.lastModified = industryJobsSheet.getRange(1,21,1,1).getValue();
-        jobs.expires = industryJobsSheet.getRange(1,22,1,1).getValue();
+        var refreshedMeta;
+        _time('loadJobs reread metadata', () => {
+          refreshedMeta = industryJobsSheet.getRange(1, 21, 1, 3).getValues()[0];
+        });
+        jobs.lastModified = refreshedMeta[0];
+        jobs.expires = refreshedMeta[1];
+        jobs.rowCount = Number(refreshedMeta[2]) || 0;
         jobs.age = Math.trunc((date - jobs.lastModified) / 1000);
         jobs.cacheRefresh = Math.trunc((jobs.expires - date) / 1000);
 
@@ -1485,38 +1645,50 @@ const Corporation = (()=>{
           Sidebar.setCacheInfo({ jobsExpiresMs: Number(jobs.expires) });
         }
       } else {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadJobs: sheet cache valid');
         Sidebar.add("Cache jobů je platná do " + new Date(jobs.expires));
       }
 
-      var lastRow = industryJobsSheet.getLastRow();
-      if (lastRow > 1) {
-        // load jobs from sheet from the sheet contents
-        let jobsArray = industryJobsSheet.getRange(2, 1, lastRow - 1, 19).getValues();
+      var rowsToRead = _rowsToReadFromCacheSheet(industryJobsSheet, jobs.rowCount);
+      if (rowsToRead > 0) {
+        var jobsArray;
+        _time('loadJobs read sheet rows', () => {
+          jobsArray = industryJobsSheet.getRange(2, 1, rowsToRead, 19).getValues();
+        });
 
-        jobs.data = jobsArray.map (a => ({
-          activityName : a[0],
-          status : a[1],
-          duration : a[2],
-          blueprintName : a[3], 
-          productName : a[4], 
-          locationName : a[5], 
-          outputLocationName : a[6], 
-          installerName : a[7],
-          startDate : a[8],
-          endDate : a[9],
-          runs : a[10],
-          blueprintId : a[11],
-          blueprintLocationId : a[12],
-          productTypeId : a[13],
-          locationId : a[14],
-          outputLocationId : a[15],
-          completedDate: a[16],
-          licensedRuns: a[17],
-          successfulRuns: a[18],
-          startTime: new Date (a[8]).getTime(),
-          endTime: new Date (a[9]).getTime(),
-          completedTime: new Date (a[16]).getTime()
-        }));
+        if (!jobs.rowCount) {
+          jobs.rowCount = _countRowsByFirstColumn(jobsArray);
+          try { industryJobsSheet.getRange(1, 23, 1, 1).setValue(jobs.rowCount); } catch (e) {}
+        } else if (jobs.rowCount > rowsToRead) {
+          jobs.rowCount = rowsToRead;
+        }
+
+        _time('loadJobs map rows', () => {
+          jobs.data = jobsArray.slice(0, jobs.rowCount || jobsArray.length).map (a => ({
+            activityName : a[0],
+            status : a[1],
+            duration : a[2],
+            blueprintName : a[3], 
+            productName : a[4], 
+            locationName : a[5], 
+            outputLocationName : a[6], 
+            installerName : a[7],
+            startDate : a[8],
+            endDate : a[9],
+            runs : a[10],
+            blueprintId : a[11],
+            blueprintLocationId : a[12],
+            productTypeId : a[13],
+            locationId : a[14],
+            outputLocationId : a[15],
+            completedDate: a[16],
+            licensedRuns: a[17],
+            successfulRuns: a[18],
+            startTime: new Date (a[8]).getTime(),
+            endTime: new Date (a[9]).getTime(),
+            completedTime: new Date (a[16]).getTime()
+          }));
+        });
 
 //        console.log(jobs);
 
@@ -1536,28 +1708,47 @@ const Corporation = (()=>{
     syncBlueprints: function() {
       // underlying sheet will be rewritten -> invalidate memo
       _cacheMemo.blueprints = null;
+      _ensureSheetColumns(blueprintsSheet, 14);
 
-      // clear the sheet contents
-      var lastRow = blueprintsSheet.getLastRow();
+      var previousLastModified = blueprintsSheet.getRange(1, 12, 1, 1).getValue();
+      var previousDataRows = Math.max(0, blueprintsSheet.getLastRow() - 1);
       var range;
-      if (lastRow > 1) {
-        range = blueprintsSheet.getRange(2, 1, lastRow - 1, 10);
-        range.clearContent();
-      }
 
-      var blueprints = Corporation.getBlueprints();
+      var blueprints = _time('syncBlueprints fetch ESI blueprints', () => Corporation.getBlueprints());
 
       let modified = new Date(blueprints.lastModified);
       trace("Modified " + modified + "(" + blueprints.lastModified + ")" + " exp " + blueprints.expires);
 
       // log cache date info
-      range = blueprintsSheet.getRange(1, 11, 1, 3);
-      range.setValues([[modified, blueprints.lastModified, blueprints.expires]]);
+      range = blueprintsSheet.getRange(1, 11, 1, 4);
+      range.setValues([[modified, blueprints.lastModified, blueprints.expires, blueprints.data.length]]);
 
       // store to sheet
       var rows = blueprints.data.map(a => [a.locationId, a.locationFlag, a.itemId, a.hangar, a.typeId, a.typeName, a.quantity, a.runs, a.materialEfficiency, a.timeEfficiency]);
-      range = blueprintsSheet.getRange(2, 1, rows.length, 10);
-      range.setValues(rows);
+
+      if (previousDataRows > 0 && _sameCacheLastModified(previousLastModified, blueprints.lastModified)) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('syncBlueprints sheet unchanged, skipped rewrite');
+        _cacheMemo.blueprints = blueprints;
+        return blueprints;
+      }
+
+      _time('syncBlueprints clear sheet', () => {
+        var lastRow = blueprintsSheet.getLastRow();
+        if (lastRow > 1) {
+          range = blueprintsSheet.getRange(2, 1, lastRow - 1, 10);
+          range.clearContent();
+        }
+      });
+
+      _time('syncBlueprints write sheet', () => {
+        if (rows.length <= 0) return;
+        range = blueprintsSheet.getRange(2, 1, rows.length, 10);
+        range.setValues(rows);
+      });
+
+      // keep the freshly-synced blueprints in memo so callers don't have to re-read the sheet
+      _cacheMemo.blueprints = blueprints;
+      return blueprints;
     },
 
     /*
@@ -1565,7 +1756,10 @@ const Corporation = (()=>{
      * if data stored in sheet have expired cache, re-sync sheet
      */ 
     loadBlueprints: function() {
+      _ensureSheetColumns(blueprintsSheet, 14);
+
       if (_cacheMemo.blueprints && _freezeMemo) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadBlueprints: memo frozen hit');
         if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo && _cacheMemo.blueprints.expires) {
           Sidebar.setCacheInfo({ blueprintsExpiresMs: Number(_cacheMemo.blueprints.expires) });
         }
@@ -1574,6 +1768,7 @@ const Corporation = (()=>{
 
       // If runtime is warm and memo is present, only reuse it while it is still valid.
       if (_cacheMemo.blueprints && _cacheMemo.blueprints.expires && (new Date().getTime() <= _cacheMemo.blueprints.expires)) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadBlueprints: memo valid hit');
         if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
           Sidebar.setCacheInfo({ blueprintsExpiresMs: Number(_cacheMemo.blueprints.expires) });
         }
@@ -1585,8 +1780,13 @@ const Corporation = (()=>{
       let date = new Date().getTime()
       var blueprints = {};
       blueprints.data = [];
-      blueprints.lastModified = blueprintsSheet.getRange(1,12,1,1).getValue();
-      blueprints.expires = blueprintsSheet.getRange(1,13,1,1).getValue();
+      var blueprintMeta;
+      _time('loadBlueprints read metadata', () => {
+        blueprintMeta = blueprintsSheet.getRange(1, 12, 1, 3).getValues()[0];
+      });
+      blueprints.lastModified = blueprintMeta[0];
+      blueprints.expires = blueprintMeta[1];
+      blueprints.rowCount = Number(blueprintMeta[2]) || 0;
       blueprints.age = Math.trunc((date - blueprints.lastModified) / 1000);
       blueprints.cacheRefresh = Math.trunc((blueprints.expires - date) / 1000);
 
@@ -1596,11 +1796,24 @@ const Corporation = (()=>{
 
       // check if asset cache is expired and refresh it
       if (date > blueprints.expires) {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadBlueprints: sheet cache expired, syncing');
         Sidebar.add("Aktualizuju cache blueprintů");
-        this.syncBlueprints();
+        var syncedBlueprints = _time('syncBlueprints total', () => this.syncBlueprints());
+        if (syncedBlueprints) {
+          if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo && syncedBlueprints.expires) {
+            Sidebar.setCacheInfo({ blueprintsExpiresMs: Number(syncedBlueprints.expires) });
+          }
+          return syncedBlueprints;
+        }
+
         date = new Date().getTime();
-        blueprints.lastModified = blueprintsSheet.getRange(1,12,1,1).getValue();
-        blueprints.expires = blueprintsSheet.getRange(1,13,1,1).getValue();
+        var refreshedMeta;
+        _time('loadBlueprints reread metadata', () => {
+          refreshedMeta = blueprintsSheet.getRange(1, 12, 1, 3).getValues()[0];
+        });
+        blueprints.lastModified = refreshedMeta[0];
+        blueprints.expires = refreshedMeta[1];
+        blueprints.rowCount = Number(refreshedMeta[2]) || 0;
         blueprints.age = Math.trunc((date - blueprints.lastModified) / 1000);
         blueprints.cacheRefresh = Math.trunc((blueprints.expires - date) / 1000);
 
@@ -1608,29 +1821,38 @@ const Corporation = (()=>{
           Sidebar.setCacheInfo({ blueprintsExpiresMs: Number(blueprints.expires) });
         }
       } else {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark('Corporation.loadBlueprints: sheet cache valid');
         Sidebar.add("Cache blueprintů je platná do " + new Date(blueprints.expires));
       }
 
-      var lastRow = blueprintsSheet.getLastRow();
-      if (lastRow > 1) {
-        // load blueprints from the sheet contents
-        let blueprintsArray = blueprintsSheet.getRange(2, 1, lastRow - 1, 10).getValues();
+      var rowsToRead = _rowsToReadFromCacheSheet(blueprintsSheet, blueprints.rowCount);
+      if (rowsToRead > 0) {
+        var blueprintsArray;
+        _time('loadBlueprints read sheet rows', () => {
+          blueprintsArray = blueprintsSheet.getRange(2, 1, rowsToRead, 10).getValues();
+        });
 
-        blueprints.data = blueprintsArray.map (a => ({
-          locationId : a[0],
-          locationFlag : a[1],
-          itemId : a[2],
-          hangar : a[3],
-          typeId : a[4],
-          typeName : a[5],
-          quantity : a[6],
-          runs : a[7],
-          materialEfficiency : a[8],
-          timeEfficiency : a[9]
-        }));
+        if (!blueprints.rowCount) {
+          blueprints.rowCount = _countRowsByFirstColumn(blueprintsArray);
+          try { blueprintsSheet.getRange(1, 14, 1, 1).setValue(blueprints.rowCount); } catch (e) {}
+        } else if (blueprints.rowCount > rowsToRead) {
+          blueprints.rowCount = rowsToRead;
+        }
 
-
-      var rows = blueprints.data.map(a => [a.locationId, a.locationFlag, a.itemId, a.hangar, a.typeId, a.typeName, a.quantity, a.runs, a.materialEfficiency, a.timeEfficiency]);
+        _time('loadBlueprints map rows', () => {
+          blueprints.data = blueprintsArray.slice(0, blueprints.rowCount || blueprintsArray.length).map (a => ({
+            locationId : a[0],
+            locationFlag : a[1],
+            itemId : a[2],
+            hangar : a[3],
+            typeId : a[4],
+            typeName : a[5],
+            quantity : a[6],
+            runs : a[7],
+            materialEfficiency : a[8],
+            timeEfficiency : a[9]
+          }));
+        });
 
 //        console.log(blueprints);
 
@@ -1757,12 +1979,14 @@ const Corporation = (()=>{
       }
 
       trace('### Loading corporate BPOs ...')
+      _ensureSheetColumns(bpoSheet, 12);
 
       var lastRow = bpoSheet.getLastRow();
+      var rowCount = Math.max(0, lastRow - 3);
 
-      if (lastRow > 1) {
+      if (rowCount > 0) {
         // load assets from sheet from the sheet contents
-        let assetsArray = bpoSheet.getRange(4, 11, lastRow - 4, 2).getValues();
+        let assetsArray = bpoSheet.getRange(4, 11, rowCount, 2).getValues();
 
         assets = assetsArray.map (a => ({
           blueprintId : a[1],

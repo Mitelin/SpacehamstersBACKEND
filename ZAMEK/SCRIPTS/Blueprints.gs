@@ -25,6 +25,22 @@ const Blueprints = (()=>{
     console.log(...args);
   };
 
+  const countRowsByFirstColumn = function(rows) {
+    if (!rows || !rows.length) return 0;
+    let count = 0;
+    while (count < rows.length && rows[count] && rows[count][0]) count++;
+    return count;
+  };
+
+  const getActiveTableRowCount = function(sheet, startColumn) {
+    const firstValue = sheet.getRange(firstDataRow, startColumn, 1, 1).getValue();
+    if (!firstValue) return 0;
+    const lastDataRow = sheet.getRange(firstDataRow, startColumn, 1, 1)
+      .getNextDataCell(SpreadsheetApp.Direction.DOWN)
+      .getRow();
+    return Math.min(maxJobs, Math.max(0, lastDataRow - firstDataRow + 1));
+  };
+
   const normalizeIndustryKeyPart = function(value) {
     if (value == null) return '';
     return String(value)
@@ -276,6 +292,32 @@ const Blueprints = (()=>{
       },
       blueprintAccessHangars: blueprintAccessHangars,
     };
+  };
+
+  const snapshotWithData = function(snapshot, data) {
+    snapshot = snapshot || {};
+    return {
+      age: snapshot.age,
+      cacheRefresh: snapshot.cacheRefresh,
+      lastModified: snapshot.lastModified,
+      expires: snapshot.expires,
+      data: data || [],
+    };
+  };
+
+  const assetMatchesAnyHangar = function(item, hangars) {
+    if (!item || !hangars) return false;
+    return hangars.some(hangar => hangar && hangar.locationID == item.locationId);
+  };
+
+  const jobMatchesAnyHangar = function(item, hangars) {
+    if (!item || !hangars) return false;
+    return hangars.some(hangar => hangar && hangar.locationID == item.outputLocationId);
+  };
+
+  const blueprintMatchesAnyHangar = function(item, hangars) {
+    if (!item || !hangars) return false;
+    return hangars.some(hangar => blueprintMatchesHangar(item, hangar));
   };
 
   const blueprintMatchesHangar = function(item, hangar) {
@@ -925,7 +967,7 @@ const Blueprints = (()=>{
         validateActiveSheet(sheet);
       }
       const _sheetName = sheet.getName();
-      var lastRow = sheet.getLastRow();
+      const clearRows = maxJobs;
 
       // open sidebar
 //      Sidebar.open();
@@ -950,33 +992,22 @@ const Blueprints = (()=>{
       });
 
 
-      // initiate arrays
       var plannedJobs;
       var inputMaterials;
+      var jobs;
       let plannedCount = 0;
       let inputCount = 0;
       _time(_sheetName + ' recalc read tables', () => {
-        // Avoid reading maxJobs rows just to find the used size.
-        // We assume the key columns are contiguous until the first blank.
-        const countContiguousRows = (startRow, col, maxRows) => {
-          const firstVal = sheet.getRange(startRow, col, 1, 1).getValue();
-          if (!firstVal) return 0;
-          const lastDataRow = sheet.getRange(startRow, col, 1, 1)
-            .getNextDataCell(SpreadsheetApp.Direction.DOWN)
-            .getRow();
-          const count = lastDataRow - startRow + 1;
-          return Math.min(maxRows, Math.max(0, count));
-        };
-
-        plannedCount = countContiguousRows(firstDataRow, 1, maxJobs);
-        inputCount = countContiguousRows(firstDataRow, colInput, maxJobs);
-
-        plannedJobs = plannedCount > 0
-          ? sheet.getRange(firstDataRow, 1, plannedCount, 22).getValues()
-          : [];
-        inputMaterials = inputCount > 0
-          ? sheet.getRange(firstDataRow, colInput, inputCount, 21).getValues()
-          : [];
+        const plannedRows = getActiveTableRowCount(sheet, 1);
+        const inputRows = getActiveTableRowCount(sheet, colInput);
+        const jobsRows = getActiveTableRowCount(sheet, colJobsList);
+        const plannedWindow = plannedRows > 0 ? sheet.getRange(firstDataRow, 1, plannedRows, 22).getValues() : [];
+        const inputWindow = inputRows > 0 ? sheet.getRange(firstDataRow, colInput, inputRows, 21).getValues() : [];
+        jobs = jobsRows > 0 ? sheet.getRange(firstDataRow, colJobsList, jobsRows, 6).getValues() : [];
+        plannedCount = countRowsByFirstColumn(plannedWindow);
+        inputCount = countRowsByFirstColumn(inputWindow);
+        plannedJobs = plannedWindow.slice(0, plannedCount);
+        inputMaterials = inputWindow.slice(0, inputCount);
       });
 
       // Build lookup maps to avoid repeated O(n) findIndex/find
@@ -1029,12 +1060,12 @@ const Blueprints = (()=>{
 //      var reactionMaterials = sheet.getRange(firstDataRow, colReact, maxJobs, 2).getValues();
 //      var interimMaterials = sheet.getRange(firstDataRow, colManufBuffer, maxJobs, 2).getValues();                      // asi rozsirit na dalsi hangar
 
-      // read cost indices
-      var costIndices;
-      _time(_sheetName + ' recalc read params', () => {
-        var range = sheet.getRange(3, 9, 8, 1);
-        costIndices = range.getValues();
+      var recalcTopValues;
+      _time(_sheetName + ' recalc read top params', () => {
+        recalcTopValues = sheet.getRange(1, 2, 11, 8).getValues();
       });
+
+      var costIndices = recalcTopValues.slice(2, 10).map(row => [row[7]]);
       let manufacturingSystemCost = costIndices[0][0];
       let manufacturingBonus = costIndices[1][0];
       let reactionSystemCost = costIndices[2][0];
@@ -1044,20 +1075,18 @@ const Blueprints = (()=>{
       let inventionSystemCost = costIndices[6][0];
       let inventionBonus = costIndices[7][0];
 
-      // zjisti ze sheetu parametry blueprintu
-      var params;
-      _time(_sheetName + ' recalc read blueprint params', () => {
-        range = sheet.getRange(1, 2, 11, 1);
-        params = range.getValues();
-      });
+      var params = recalcTopValues.map(row => [row[0]]);
       var useBufferHangars = (params[3][0] == 'Ne')?false:true;
-      const hangarContext = buildProjectHangarContext(
-        params[1][0],
-        params[2][0],
-        params[4][0],
-        params[10][0],
-        useBufferHangars
-      );
+      let hangarContext;
+      _time(_sheetName + ' recalc build hangar context', () => {
+        hangarContext = buildProjectHangarContext(
+          params[1][0],
+          params[2][0],
+          params[4][0],
+          params[10][0],
+          useBufferHangars
+        );
+      });
 
       if (typeof Corporation !== 'undefined' && (!Corporation.isMemoFrozen || !Corporation.isMemoFrozen())) {
         if (Corporation.syncJobs) {
@@ -1074,17 +1103,6 @@ const Blueprints = (()=>{
       /* 
       * Update quantities in running jobs
       */
-      var jobs;
-      _time(_sheetName + ' recalc read running jobs', () => {
-        const rowsToRead = Math.min(maxJobs, Math.max(0, lastRow - firstDataRow + 1));
-        if (rowsToRead > 0) {
-          var range = sheet.getRange(firstDataRow, colJobsList, rowsToRead, 6);
-          jobs = range.getValues();
-        } else {
-          jobs = [];
-        }
-      });
-      
       _time(_sheetName + ' recalc apply running jobs', () => {
         jobs.forEach(job => {
           if (job[3]) {
@@ -1296,11 +1314,6 @@ const Blueprints = (()=>{
       }
 
       _time(_sheetName + ' recalc write requirements', () => {
-        range = sheet.getRange(firstDataRow, colJobs + 1, maxJobs, 1);
-        range.setValue(0);
-        range = sheet.getRange(firstDataRow, colInput + 9, maxJobs, 6);
-        range.setValue(0);
-
         if (plannedCount > 0) {
           sheet.getRange(firstDataRow, colJobs, plannedCount, 1).setValues(inProgressValues);
           sheet.getRange(firstDataRow, colJobs + 1, plannedCount, 1).setValues(requiredValues);
@@ -1314,12 +1327,16 @@ const Blueprints = (()=>{
         SpreadsheetApp.flush();
       });
 
-      const refreshedPlannedJobs = plannedCount > 0
-        ? sheet.getRange(firstDataRow, 1, plannedCount, 22).getValues()
-        : [];
-      const refreshedInputMaterials = inputCount > 0
-        ? sheet.getRange(firstDataRow, colInput, inputCount, 21).getValues()
-        : [];
+      let refreshedPlannedJobs = [];
+      let refreshedInputMaterials = [];
+      _time(_sheetName + ' recalc read refreshed formulas', () => {
+        if (plannedCount > 0) {
+          refreshedPlannedJobs = sheet.getRange(firstDataRow, 1, plannedCount, 22).getValues();
+        }
+        if (inputCount > 0) {
+          refreshedInputMaterials = sheet.getRange(firstDataRow, colInput, inputCount, 21).getValues();
+        }
+      });
 
       // update the planned job status and run cost
       i = 0;
@@ -1337,17 +1354,28 @@ const Blueprints = (()=>{
       let activeBpoReservationsByBlueprint;
       let preparedBpoReservationsByBlueprint;
       _time(_sheetName + ' recalc load corp context', () => {
-        const assetSnapshot = Corporation.getAssetsCached(hangarContext.hangars);
-        const blueprintSnapshot = Corporation.getBlueprintsCached(hangarContext.hangars);
+        const allAssetSnapshot = Corporation.getAssetsCached();
         const allBlueprintsSnapshot = Corporation.getBlueprintsCached();
+        allCorpJobs = Corporation.getJobsCached(null, true);
+
+        const assetSnapshot = snapshotWithData(
+          allAssetSnapshot,
+          (allAssetSnapshot.data || []).filter(item => assetMatchesAnyHangar(item, hangarContext.hangars))
+        );
+        const blueprintSnapshot = snapshotWithData(
+          allBlueprintsSnapshot,
+          (allBlueprintsSnapshot.data || []).filter(item => blueprintMatchesAnyHangar(item, hangarContext.hangars))
+        );
         bpos = (allBlueprintsSnapshot.data || [])
           .filter(item => Number(item && item.runs) === -1)
           .map(item => ({
             blueprintId: item.itemId,
             blueprint: item.typeName,
           }));
-        allJobs = Corporation.getJobsCached(hangarContext.hangars, true);
-        allCorpJobs = Corporation.getJobsCached(null, true);
+        allJobs = snapshotWithData(
+          allCorpJobs,
+          (allCorpJobs.data || []).filter(item => jobMatchesAnyHangar(item, hangarContext.hangars))
+        );
         allRunningJobs = allCorpJobs.data.filter(item => item.status == 'active');   // BPO occupancy is global across projects
 
         availableBposByBlueprint = new Map();
@@ -1664,6 +1692,9 @@ const Blueprints = (()=>{
     */
     updateProject: function(sheet, notify = true) {
       const _time = (label, fn) => (typeof Perf !== 'undefined' && Perf.time) ? Perf.time(label, fn) : fn();
+      const _mark = (label) => {
+        if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark(label);
+      };
 
       if (!sheet) {
         // zjisti otevreny sheet, ze ktereho je skript spusteny
@@ -1671,12 +1702,15 @@ const Blueprints = (()=>{
         validateActiveSheet(sheet);
       }
       const _sheetName = sheet.getName();
+      const clearRows = maxJobs;
 
-      var lastRow = sheet.getLastRow();
-
-      Sidebar.open(sheet.getName());
-      // zjisti, jestli neni sheet zamceny
-      let lockVal = sheet.getRange(rowLock, colLock).getValue();
+      let lockVal;
+      let setupValues;
+      _time(_sheetName + ' update setup', () => {
+        if (notify) Sidebar.open(sheet.getName());
+        setupValues = sheet.getRange(1, 2, 12, 12).getValues();
+        lockVal = setupValues[rowLock - 1][colLock - 2];
+      });
       if (lockVal) {
         // sheet je zamceny, preskakuj
         Sidebar.add("Zamčeno kvůli stěhování, neaktualizuju!");
@@ -1686,8 +1720,7 @@ const Blueprints = (()=>{
       Sidebar.add("Mažu stav skladů a jobů");
 
       // zjisti ze sheetu parametry blueprintu
-      range = sheet.getRange(2, 2, 11, 1);
-      var data = range.getValues();
+      var data = setupValues.slice(1, 12).map(row => [row[0]]);
       var hangarManufactoring = data[0][0];
       var hangarReaction = data[1][0];
       var useBufferHangar = (data[2][0]== 'Ne')?false:true;
@@ -1695,7 +1728,7 @@ const Blueprints = (()=>{
       var hangarCapital = data[10][0];
       
       // zjisti ze sheetu osobni hangary
-      var personalData = sheet.getRange(1, 13, 7, 1).getValues();
+      var personalData = setupValues.slice(0, 7).map(row => [row[11]]);
       var personalHangarManufactoring
       var personalHangarReaction
       var personalHangarManufactoringBuffer
@@ -1705,7 +1738,8 @@ const Blueprints = (()=>{
       var maxAge = 0;
       
       // Zjisti hangary, pouze pokud je prihlaseny vlastnik hangaru
-      if (personalData[0][0] == Personal.getName()) {
+      var personalName = _time(_sheetName + ' personal name', () => Personal.getName());
+      if (personalData[0][0] == personalName) {
         personalHangarManufactoring = personalData[1][0]
         if (!isNaN(personalHangarManufactoring)) personalHangars.push(personalHangarManufactoring)
         personalHangarReaction = personalData[3][0]
@@ -1732,6 +1766,7 @@ const Blueprints = (()=>{
         sheet.getRange(6, colLog + 1, 1, 1).setValue((jobsPersonal.cacheRefresh / 60).toFixed(2) + " m");
       }
 
+      _mark(_sheetName + ' build hangar list start');
       // find the hangar identifications
       var hangars = [];
       var hangarsBPC = [];      // BPC runs only from research and manufactoring hangars - no interims
@@ -1770,6 +1805,7 @@ const Blueprints = (()=>{
         hangars = hangars.concat(hangarResB)
       }
       trace(hangars)
+      _mark(_sheetName + ' build hangar list done');
 
       /* 
       * Update hangars 
@@ -1777,35 +1813,35 @@ const Blueprints = (()=>{
 
       _time(_sheetName + ' clear tables', () => {
         // clear sheet manufacturing hangar table contents
-        range = sheet.getRange(firstDataRow, colManuf, lastRow - 10, 2);
+        range = sheet.getRange(firstDataRow, colManuf, clearRows, 2);
         range.setValue('');
 
         // clear sheet reaction hangar table contents
-        range = sheet.getRange(firstDataRow, colReact, lastRow - 10, 2);
+        range = sheet.getRange(firstDataRow, colReact, clearRows, 2);
         range.setValue('');
 
         // clear sheet manufactoring buffer hangar table contents
-        range = sheet.getRange(firstDataRow, colManufBuffer, lastRow - 10, 2);
+        range = sheet.getRange(firstDataRow, colManufBuffer, clearRows, 2);
         range.setValue('');
 
         // clear sheet reaction buffer hangar table contents
-        range = sheet.getRange(firstDataRow, colReactBuffer, lastRow - 10, 2);
+        range = sheet.getRange(firstDataRow, colReactBuffer, clearRows, 2);
         range.setValue('');
 
         // clear sheet reaction buffer hangar table contents
-        range = sheet.getRange(firstDataRow, colBPC, lastRow - 10, 3);
+        range = sheet.getRange(firstDataRow, colBPC, clearRows, 3);
         range.setValue('');
 
         // clear sheet research hangar table contents
-        range = sheet.getRange(firstDataRow, colResearch, lastRow - 10, 2);
+        range = sheet.getRange(firstDataRow, colResearch, clearRows, 2);
         range.setValue('');
         
         // clear sheet research buffer hangar table contents
-        range = sheet.getRange(firstDataRow, colResearchBuffer, lastRow - 10, 2);
+        range = sheet.getRange(firstDataRow, colResearchBuffer, clearRows, 2);
         range.setValue('');
 
         // clear sheet jobs table contents
-        range = sheet.getRange(firstDataRow, colJobsList, lastRow - 10, 10);
+        range = sheet.getRange(firstDataRow, colJobsList, clearRows, 10);
         range.setValue('');
       });
 
@@ -1857,18 +1893,9 @@ const Blueprints = (()=>{
       // (Keep this read as small as possible; it was previously maxJobs×22.)
       var plannedJobs;
       _time(_sheetName + ' read planned jobs', () => {
-        const firstVal = sheet.getRange(firstDataRow, 1, 1, 1).getValue();
-        if (!firstVal) {
-          plannedJobs = [];
-          return;
-        }
-        const lastDataRow = sheet.getRange(firstDataRow, 1, 1, 1)
-          .getNextDataCell(SpreadsheetApp.Direction.DOWN)
-          .getRow();
-        const plannedCount = Math.min(maxJobs, Math.max(0, lastDataRow - firstDataRow + 1));
-        plannedJobs = plannedCount > 0
-          ? sheet.getRange(firstDataRow, 1, plannedCount, 22).getValues()
-          : [];
+        const plannedRows = getActiveTableRowCount(sheet, 1);
+        const plannedWindow = plannedRows > 0 ? sheet.getRange(firstDataRow, 1, plannedRows, 22).getValues() : [];
+        plannedJobs = plannedWindow.slice(0, countRowsByFirstColumn(plannedWindow));
       });
 
       // Prepare job delta against the asset snapshot.
@@ -2215,16 +2242,21 @@ const Blueprints = (()=>{
         finishedItems = getFinishedJobProducts  (plannedJobs, deliveredJobs, hangarResB.locationID);
       */
       if (hangarResB && (hangarResB.length > 0)) {
+        const researchBufferJobHangars = hangarResB.filter(hangar => hangar && hangar.locationType == 'item');
+        const researchBufferExactHangars = researchBufferJobHangars.length > 0 ? researchBufferJobHangars : hangarResB;
         // add job products delivered after corporate items cache updated
         finishedItems = []
-        hangarResB.forEach(hangar => finishedItems = finishedItems.concat(getFinishedJobProducts  (plannedJobs, deliveredJobs, hangar.locationID)))
+        researchBufferExactHangars.forEach(hangar => finishedItems = finishedItems.concat(getFinishedJobProducts  (plannedJobs, deliveredJobs, hangar.locationID)))
         if (finishedItems.length > 0) {
           trace(finishedItems);
           range = sheet.getRange(firstDataRow + corpItems + persItems + 1, colResearchBuffer, finishedItems.length, 2);
           _time(_sheetName + ' write research buffer finished', () => range.setValues(finishedItems));
         }
         // deduct material usage from new jobs started after items cache updated
-        deductedItems = newJobMaterials.filter(i => (i[4] == 'Copying' || i[4] == 'Invention'))
+        deductedItems = newJobMaterials.filter(i => (
+          (i[4] == 'Copying' || i[4] == 'Invention')
+          && researchBufferExactHangars.some(hangar => i[2] == hangar.locationID)
+        ))
         if (deductedItems.length > 0) {
           trace(deductedItems);
           deductedItemsShort = deductedItems.map(i => ([i[0], i[1]]));
@@ -2321,12 +2353,12 @@ const Blueprints = (()=>{
         _time(_sheetName + ' write jobs list (personal)', () => range.setValues(rows));
       }
 
-      SpreadsheetApp.flush();
+      _time(_sheetName + ' flush before recalc', () => SpreadsheetApp.flush());
 
       // recalculate project
       _time(_sheetName + ' recalculate project', () => this.recalculateProject(sheet, notify));
 
-      Sidebar.close();
+      if (notify) Sidebar.close();
     },
 
     /*
@@ -2771,7 +2803,191 @@ function runUpdateProject() {
 }
 
 function runUpdateAllProjects() {
+  return _runUpdateAllProjectsStart({ debug: false });
+}
+
+function runUpdateAllProjectsDebug() {
+  return _runUpdateAllProjectsStart({ debug: true });
+}
+
+function runUpdateAllProjectsContinue() {
+  const sp = PropertiesService.getScriptProperties();
+  return _runUpdateAllProjects({
+    debug: sp.getProperty('UPDATE_ALL_PROJECTS_DEBUG') === '1',
+    continuation: true,
+    batched: true,
+  });
+}
+
+function runUpdateAllProjectsCancel() {
+  _deleteUpdateAllProjectsTriggers();
+  _restoreUpdateAllProjectsDebugProperties();
+  _clearUpdateAllProjectsState();
+  try {
+    PropertiesService.getScriptProperties().setProperty('UPDATE_ALL_PROJECTS_STATUS', 'canceled at ' + new Date().toISOString());
+  } catch (e) {}
+  try {
+    SpreadsheetApp.getUi().alert('Pokračování Aktualizuj vše bylo zrušeno.', '', SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {}
+}
+
+function _runUpdateAllProjectsStart(options) {
+  const debug = options && options.debug;
+  const sp = PropertiesService.getScriptProperties();
+  _deleteUpdateAllProjectsTriggers();
+  _storeUpdateAllProjectsDebugProperties();
+  sp.setProperty('UPDATE_ALL_PROJECTS_NEXT_INDEX', '0');
+  sp.setProperty('UPDATE_ALL_PROJECTS_DEBUG', debug ? '1' : '0');
+  sp.setProperty('UPDATE_ALL_PROJECTS_STARTED_AT', new Date().toISOString());
+  sp.setProperty('UPDATE_ALL_PROJECTS_STATUS', 'running');
+  return _runUpdateAllProjects({ debug: debug, continuation: false, batched: false });
+}
+
+function _updateAllProjectsNames() {
+  return [
+    'Projekt ALPRO 1',
+    'Projekt ALPRO 2',
+    'Projekt ALPRO 3',
+    'Projekt ALPRO 4',
+    'Projekt ALPRO 5',
+    'Projekt ALPRO 6',
+    'Projekt ALPRO 7',
+  ];
+}
+
+function _storeUpdateAllNullableProperty(sp, key, value) {
+  sp.setProperty(key, value == null ? '__NULL__' : String(value));
+}
+
+function _readUpdateAllNullableProperty(sp, key, fallback) {
+  const value = sp.getProperty(key);
+  if (value == null) return fallback;
+  return value === '__NULL__' ? null : value;
+}
+
+function _storeUpdateAllProjectsDebugProperties() {
+  const sp = PropertiesService.getScriptProperties();
+  _storeUpdateAllNullableProperty(sp, 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING', sp.getProperty('DEBUG_TIMING'));
+  _storeUpdateAllNullableProperty(sp, 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_SHEET', sp.getProperty('DEBUG_TIMING_SHEET'));
+  _storeUpdateAllNullableProperty(sp, 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_VERBOSE', sp.getProperty('DEBUG_TIMING_VERBOSE'));
+  _storeUpdateAllNullableProperty(sp, 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_APPEND', sp.getProperty('DEBUG_TIMING_APPEND'));
+}
+
+function _restoreUpdateAllProjectsDebugProperties() {
+  const sp = PropertiesService.getScriptProperties();
+  const props = [
+    ['DEBUG_TIMING', 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING'],
+    ['DEBUG_TIMING_SHEET', 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_SHEET'],
+    ['DEBUG_TIMING_VERBOSE', 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_VERBOSE'],
+    ['DEBUG_TIMING_APPEND', 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_APPEND'],
+  ];
+  props.forEach(pair => {
+    const value = _readUpdateAllNullableProperty(sp, pair[1], null);
+    if (value == null) sp.deleteProperty(pair[0]);
+    else sp.setProperty(pair[0], value);
+  });
+}
+
+function _clearUpdateAllProjectsState() {
+  const sp = PropertiesService.getScriptProperties();
+  [
+    'UPDATE_ALL_PROJECTS_NEXT_INDEX',
+    'UPDATE_ALL_PROJECTS_DEBUG',
+    'UPDATE_ALL_PROJECTS_STARTED_AT',
+    'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING',
+    'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_SHEET',
+    'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_VERBOSE',
+    'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_APPEND',
+  ].forEach(key => sp.deleteProperty(key));
+}
+
+function _deleteUpdateAllProjectsTriggers() {
+  try {
+    ScriptApp.getProjectTriggers().forEach(trigger => {
+      if (trigger.getHandlerFunction && trigger.getHandlerFunction() === 'runUpdateAllProjectsContinue') {
+        ScriptApp.deleteTrigger(trigger);
+      }
+    });
+  } catch (e) {}
+}
+
+function _scheduleUpdateAllProjectsContinuation(nextIndex, totalCount) {
+  const sp = PropertiesService.getScriptProperties();
+  sp.setProperty('UPDATE_ALL_PROJECTS_NEXT_INDEX', String(nextIndex));
+  sp.setProperty('UPDATE_ALL_PROJECTS_STATUS', 'scheduled ' + nextIndex + '/' + totalCount + ' at ' + new Date().toISOString());
+  _deleteUpdateAllProjectsTriggers();
+  ScriptApp.newTrigger('runUpdateAllProjectsContinue')
+    .timeBased()
+    .after(60 * 1000)
+    .create();
+}
+
+function _runUpdateAllProjects(options) {
+  const debug = options && options.debug;
+  const continuation = options && options.continuation;
+  const batched = options && options.batched;
+  const executionStartedMs = new Date().getTime();
+  const executionBudgetMs = 210 * 1000;
   const _time = (label, fn) => (typeof Perf !== 'undefined' && Perf.time) ? Perf.time(label, fn) : fn();
+  const _mark = (label) => {
+    if (typeof Perf !== 'undefined' && Perf.mark) Perf.mark(label);
+  };
+  const _errorMark = (label, error) => {
+    const message = error && error.stack ? error.stack : String(error);
+    _mark(label + ': ' + message);
+  };
+  const _elapsedMs = () => new Date().getTime() - executionStartedMs;
+  const previousTiming = (() => {
+    try {
+      const sp = PropertiesService.getScriptProperties();
+      return batched ? _readUpdateAllNullableProperty(sp, 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING', sp.getProperty('DEBUG_TIMING')) : sp.getProperty('DEBUG_TIMING');
+    } catch (e) {
+      return null;
+    }
+  })();
+  const previousTimingSheet = (() => {
+    try {
+      const sp = PropertiesService.getScriptProperties();
+      return batched ? _readUpdateAllNullableProperty(sp, 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_SHEET', sp.getProperty('DEBUG_TIMING_SHEET')) : sp.getProperty('DEBUG_TIMING_SHEET');
+    } catch (e) {
+      return null;
+    }
+  })();
+  const previousTimingVerbose = (() => {
+    try {
+      const sp = PropertiesService.getScriptProperties();
+      return batched ? _readUpdateAllNullableProperty(sp, 'UPDATE_ALL_PROJECTS_PREV_DEBUG_TIMING_VERBOSE', sp.getProperty('DEBUG_TIMING_VERBOSE')) : sp.getProperty('DEBUG_TIMING_VERBOSE');
+    } catch (e) {
+      return null;
+    }
+  })();
+  var debugSummaryWritten = false;
+  var batchCompleted = false;
+  var batchScheduled = false;
+  var nextProjectIndex = 0;
+
+  if (!debug) {
+    try {
+      const sp = PropertiesService.getScriptProperties();
+      sp.deleteProperty('DEBUG_TIMING_SHEET');
+      sp.deleteProperty('DEBUG_TIMING_VERBOSE');
+    } catch (e) {}
+  }
+
+  if (debug && typeof Perf !== 'undefined') {
+    try {
+      const sp = PropertiesService.getScriptProperties();
+      sp.setProperty('DEBUG_TIMING', '1');
+      sp.setProperty('DEBUG_TIMING_SHEET', '1');
+      sp.setProperty('DEBUG_TIMING_VERBOSE', '1');
+      sp.setProperty('DEBUG_TIMING_APPEND', continuation ? '1' : '0');
+    } catch (e) {}
+    if (Perf.enable) Perf.enable();
+    if (Perf.reset) Perf.reset('Aktualizuj vše DEBUG');
+    _mark('Debug běh: start');
+  }
+
+  try {
 
   // Pre-flight: Projects use corporate token stored in ScriptProperties.
   // If it was cleared (e.g. after invalid_grant), guide the user to re-login.
@@ -2803,9 +3019,11 @@ function runUpdateAllProjects() {
 
   // Ensure per-execution caches start clean (Apps Script runtime may be warm).
   if (typeof Corporation !== 'undefined' && Corporation.resetMemo) {
+    _mark('Reset memo cache');
     Corporation.resetMemo();
   }
   if (typeof Blueprints !== 'undefined' && Blueprints.resetPreparedCopyingReservationsMemo) {
+    _mark('Reset prepared copying reservations memo');
     Blueprints.resetPreparedCopyingReservationsMemo();
   }
   /*
@@ -2839,30 +3057,50 @@ function runUpdateAllProjects() {
   */
 
   _time('runUpdateAllProjects', () => {
-    const ss = SpreadsheetApp.getActive();
+    const ss = SpreadsheetApp.getActiveSpreadsheet ? SpreadsheetApp.getActiveSpreadsheet() : SpreadsheetApp.getActive();
 
     // Open sidebar immediately so cache warm-up steps are visible.
     if (typeof Sidebar !== 'undefined' && Sidebar.open) {
       Sidebar.open('');
-      Sidebar.add('Načítám cache...');
+      Sidebar.add(debug ? 'DEBUG: Načítám cache...' : 'Načítám cache...');
     }
 
     // Freeze memo caches for the duration of this run.
     // This prevents short ESI cache lifetimes (e.g. jobs ~5 min) from forcing
     // mid-run refreshes when updating multiple projects.
     if (typeof Corporation !== 'undefined' && Corporation.freezeMemo) {
+      _mark('Freeze memo cache ON');
       Corporation.freezeMemo();
     }
 
     try {
-      // Warm caches once (may trigger a single sync if expired).
+      // Warm caches once via load* helpers so valid sheet cache is reused
+      // and expired cache is refreshed at most once per run.
       if (typeof Corporation !== 'undefined') {
         const warmed = {};
-        if (Corporation.loadAssets) warmed.assets = _time('warm cache: assets', () => Corporation.loadAssets());
-        if (Corporation.syncJobs) warmed.jobs = _time('warm cache: jobs', () => Corporation.syncJobs());
-        else if (Corporation.loadJobs) warmed.jobs = _time('warm cache: jobs', () => Corporation.loadJobs());
-        if (Corporation.syncBlueprints) warmed.blueprints = _time('warm cache: blueprints', () => Corporation.syncBlueprints());
-        else if (Corporation.loadBlueprints) warmed.blueprints = _time('warm cache: blueprints', () => Corporation.loadBlueprints());
+        _mark('Warm cache: start');
+        try {
+          _mark('Warm cache: before assets');
+          if (Corporation.loadAssets) warmed.assets = _time('warm cache: assets', () => Corporation.loadAssets());
+          _mark('Warm cache: before jobs');
+          if (Corporation.loadJobs) warmed.jobs = _time('warm cache: jobs', () => Corporation.loadJobs());
+          else if (Corporation.syncJobs) warmed.jobs = _time('warm cache: jobs', () => Corporation.syncJobs());
+          _mark('Warm cache: before jobs/assets guard');
+
+          const assetsLastModifiedMs = _toEpochMs(warmed.assets && warmed.assets.lastModified);
+          const jobsLastModifiedMs = _toEpochMs(warmed.jobs && warmed.jobs.lastModified);
+          if (Corporation.syncJobs && assetsLastModifiedMs && (!jobsLastModifiedMs || jobsLastModifiedMs < assetsLastModifiedMs)) {
+            warmed.jobs = _time('warm cache: jobs after assets', () => Corporation.syncJobs());
+          }
+
+          _mark('Warm cache: before blueprints');
+          if (Corporation.loadBlueprints) warmed.blueprints = _time('warm cache: blueprints', () => Corporation.loadBlueprints());
+          else if (Corporation.syncBlueprints) warmed.blueprints = _time('warm cache: blueprints', () => Corporation.syncBlueprints());
+        } catch (e) {
+          _errorMark('Warm cache ERROR', e);
+          throw e;
+        }
+        _mark('Warm cache: done');
 
         // Publish cache expiry info for the sidebar footer.
         if (typeof Sidebar !== 'undefined' && Sidebar.setCacheInfo) {
@@ -2874,27 +3112,93 @@ function runUpdateAllProjects() {
         }
       }
 
-      const names = [
-        'Projekt ALPRO 1',
-        'Projekt ALPRO 2',
-        'Projekt ALPRO 3',
-        'Projekt ALPRO 4',
-        'Projekt ALPRO 5',
-        'Projekt ALPRO 6',
-        'Projekt ALPRO 7',
-      ];
+      const names = _updateAllProjectsNames();
+      const sp = PropertiesService.getScriptProperties();
+      const savedIndex = batched ? parseInt(sp.getProperty('UPDATE_ALL_PROJECTS_NEXT_INDEX') || '0', 10) : 0;
+      const startIndex = isNaN(savedIndex) ? 0 : Math.max(0, Math.min(savedIndex, names.length));
+      nextProjectIndex = startIndex;
 
-      names.forEach(name => {
+      for (let i = startIndex; i < names.length; i++) {
+        if (batched && i > startIndex && _elapsedMs() >= executionBudgetMs) {
+          batchScheduled = true;
+          _mark('Batch pause before: ' + names[i]);
+          _scheduleUpdateAllProjectsContinuation(i, names.length);
+          break;
+        }
+
+        const name = names[i];
+        if (typeof Sidebar !== 'undefined' && Sidebar.setHeader) {
+          Sidebar.setHeader('Aktualizace Projektu ' + (i + 1) + '/' + names.length);
+        }
+        _mark('Project start: ' + name);
         _time('update: ' + name, () => Blueprints.updateProject(ss.getSheetByName(name), false));
-      });
+        _mark('Project done: ' + name);
+        nextProjectIndex = i + 1;
+        if (batched) sp.setProperty('UPDATE_ALL_PROJECTS_NEXT_INDEX', String(nextProjectIndex));
+      }
+
+      if (batched && nextProjectIndex >= names.length) {
+        batchCompleted = true;
+        _deleteUpdateAllProjectsTriggers();
+        sp.setProperty('UPDATE_ALL_PROJECTS_STATUS', 'completed at ' + new Date().toISOString());
+      }
     } finally {
       if (typeof Corporation !== 'undefined' && Corporation.unfreezeMemo) {
+        _mark('Freeze memo cache OFF');
         Corporation.unfreezeMemo();
       }
     }
   });
 
-  SpreadsheetApp.getUi().alert('Aktualizace dokončena', '', SpreadsheetApp.getUi().ButtonSet.OK);
+  if (typeof Sidebar !== 'undefined' && Sidebar.close) {
+    Sidebar.close();
+  }
+
+  if (debug && typeof Perf !== 'undefined' && Perf.summary) {
+    Perf.summary('Aktualizuj vše DEBUG', 30);
+    debugSummaryWritten = true;
+  }
+
+  if (batched && batchScheduled) {
+    if (!continuation) {
+      SpreadsheetApp.getUi().alert('Aktualizace poběží dál po dávkách.', 'Hotovo ' + nextProjectIndex + '/' + _updateAllProjectsNames().length + '. Pokračování je naplánované automaticky.', SpreadsheetApp.getUi().ButtonSet.OK);
+    }
+    return;
+  }
+
+  if (batched && batchCompleted) {
+    _restoreUpdateAllProjectsDebugProperties();
+    _clearUpdateAllProjectsState();
+  }
+
+  if (!continuation) {
+    SpreadsheetApp.getUi().alert(debug ? 'Debug aktualizace dokončena' : 'Aktualizace dokončena', '', SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+
+  } finally {
+    if (debug && !debugSummaryWritten && typeof Perf !== 'undefined' && Perf.summary) {
+      Perf.summary('Aktualizuj vše DEBUG', 30);
+    } else if (debug && typeof Perf !== 'undefined' && Perf.flush) {
+      Perf.flush();
+    }
+
+    if (debug && (!batched || batchCompleted || !batchScheduled)) {
+      try {
+        const sp = PropertiesService.getScriptProperties();
+        if (previousTiming == null) sp.deleteProperty('DEBUG_TIMING');
+        else sp.setProperty('DEBUG_TIMING', previousTiming);
+        if (previousTimingSheet == null) sp.deleteProperty('DEBUG_TIMING_SHEET');
+        else sp.setProperty('DEBUG_TIMING_SHEET', previousTimingSheet);
+        if (previousTimingVerbose == null) sp.deleteProperty('DEBUG_TIMING_VERBOSE');
+        else sp.setProperty('DEBUG_TIMING_VERBOSE', previousTimingVerbose);
+        if (batched) _restoreUpdateAllProjectsDebugProperties();
+      } catch (e) {}
+    }
+
+    if (batched && batchCompleted) {
+      _clearUpdateAllProjectsState();
+    }
+  }
 
 }
 

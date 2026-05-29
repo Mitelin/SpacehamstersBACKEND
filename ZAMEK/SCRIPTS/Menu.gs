@@ -28,6 +28,7 @@ function onOpen() {
     .addItem('Načíst: Aktivita', 'syncActivity')
     .addItem('Načíst: Hangáry', 'syncHangars')
     .addItem('Projekty: Aktualizuj vše', 'runUpdateAllProjects')
+    .addItem('Projekty: Aktualizuj vše DEBUG', 'runUpdateAllProjectsDebug')
     .addItem('Zasobovani: Nakup list', 'zasobovaniUpdateNakupList')
     .addSeparator()
     .addSubMenu(ui.createMenu('Debug')

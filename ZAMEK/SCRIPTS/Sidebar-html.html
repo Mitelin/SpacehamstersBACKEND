@@ -176,8 +176,13 @@
   function render(status) {
     status = status || {};
 
-    var n = extractProjectNumber(status.heading);
-    setText('title', n ? ('Aktualizace Projektu ' + n) : 'Aktualizace Projektu');
+    var heading = String(status.heading || '');
+    if (heading.indexOf('Aktualizace') === 0) {
+      setText('title', heading);
+    } else {
+      var n = extractProjectNumber(heading);
+      setText('title', n ? ('Aktualizace Projektu ' + n) : 'Aktualizace Projektu');
+    }
 
     var items = Array.isArray(status.items) ? status.items : [];
     var list = document.getElementById('list');

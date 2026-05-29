@@ -553,6 +553,46 @@ function testxxx() {
  */
 var priceList = {
   l_data: null,       // nacteny cenik
+  l_indexByName: null,
+  l_indexByTypeId: null,
+  l_indexLength: 0,
+
+  _indexRow: function(row) {
+    if (!row) return;
+    if (row[0] !== null && typeof row[0] !== 'undefined' && row[0] !== '') {
+      this.l_indexByName.set(String(row[0]), row);
+    }
+    if (row[1] !== null && typeof row[1] !== 'undefined' && row[1] !== '') {
+      this.l_indexByTypeId.set(String(row[1]), row);
+    }
+  },
+
+  _rebuildIndex: function() {
+    this.l_indexByName = new Map();
+    this.l_indexByTypeId = new Map();
+    const data = Array.isArray(this.l_data) ? this.l_data : [];
+    for (let i = 0; i < data.length; i++) {
+      this._indexRow(data[i]);
+    }
+    this.l_indexLength = data.length;
+  },
+
+  _ensureIndex: function() {
+    const dataLength = Array.isArray(this.l_data) ? this.l_data.length : 0;
+    if (!this.l_indexByName || !this.l_indexByTypeId || this.l_indexLength !== dataLength) {
+      this._rebuildIndex();
+    }
+  },
+
+  _getRowByName: function(typeName) {
+    this._ensureIndex();
+    return this.l_indexByName.get(String(typeName));
+  },
+
+  _getRowByTypeId: function(typeId) {
+    this._ensureIndex();
+    return this.l_indexByTypeId.get(String(typeId));
+  },
 
   init: function (force) {
     if (!force && this.l_data) return;
@@ -561,9 +601,11 @@ var priceList = {
     var lastRow = pricelistSheet.getLastRow();
     if (lastRow <= 1) {
       this.l_data = [];
+      this._rebuildIndex();
       return;
     }
     this.l_data = pricelistSheet.getRange(2, 1, lastRow - 1, pricecolEVE + 19).getValues();
+    this._rebuildIndex();
 //    console.log(this.l_data[0]);
   },
 
@@ -577,7 +619,7 @@ var priceList = {
     var res = {};
 
     // najdi konkretni radku
-    let row = this.l_data.find(element => element[1] == typeId);
+    let row = this._getRowByTypeId(typeId);
     if (!row) {
 
       // find the last row
@@ -652,6 +694,9 @@ var priceList = {
         '',
         minerals
       ])
+      row = this.l_data[this.l_data.length - 1];
+      this._indexRow(row);
+      this.l_indexLength = this.l_data.length;
 
       // add item to pricelist sheet
       pricelistSheet.getRange(lastPricelistRow + 3,1 , 1, 35).setValues([[
@@ -693,7 +738,6 @@ var priceList = {
       ]]);
 
       lastPricelistRow++;
-      row = this.l_data[lastPricelistRow];
     }
 
     // vytvor objekt s rozparsovanou cenou
@@ -725,10 +769,13 @@ var priceList = {
     var res = {};
 
     // najdi konkretni radku
-    let row = this.l_data.find(element => element[0] == typeName);
+    let row = this._getRowByName(typeName);
     if (!row) {
       pricelistSheet.appendRow([typeName]);
-      this.l_data.push([typeName, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null])
+      row = [typeName, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null];
+      this.l_data.push(row)
+      this._indexRow(row);
+      this.l_indexLength = this.l_data.length;
       res = {
         "eveAverage": 0,
         "eveAdjusted": 0,

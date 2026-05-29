@@ -5,6 +5,7 @@ const Sidebar = (()=>{
   const userProperties = PropertiesService.getUserProperties();
   let itemsCache = null;
   let cacheInfoCache = null;
+  let headerCache = null;
   let dirty = false;
   let lastFlushMs = 0;
   let uiShown = false;
@@ -31,8 +32,12 @@ const Sidebar = (()=>{
       var htmlOutput = HtmlService
         .createHtmlOutputFromFile('Sidebar-html')
         .setTitle('Aktualizace Projektu');
-      SpreadsheetApp.getUi().showSidebar(htmlOutput);
-      uiShown = true;
+      try {
+        SpreadsheetApp.getUi().showSidebar(htmlOutput);
+        uiShown = true;
+      } catch (e) {
+        uiShown = false;
+      }
     },
 
     /*
@@ -42,7 +47,10 @@ const Sidebar = (()=>{
       /*
       items = logSheet.getRange(1,1).setValue(header);
       */
-      userProperties.setProperty("sidebarHeader", header);
+      const value = header ? String(header) : '';
+      if (headerCache === value) return;
+      headerCache = value;
+      userProperties.setProperty("sidebarHeader", value);
     },
 
     /*
@@ -55,6 +63,7 @@ const Sidebar = (()=>{
       */
       itemsCache = [];
       cacheInfoCache = null;
+      headerCache = '';
       dirty = false;
       lastFlushMs = 0;
       userProperties.setProperty("sidebarHeader", '');
@@ -75,6 +84,12 @@ const Sidebar = (()=>{
           cacheInfoCache = {};
         }
       }
+
+      let changed = false;
+      Object.keys(partial).forEach(key => {
+        if (String(cacheInfoCache[key]) !== String(partial[key])) changed = true;
+      });
+      if (!changed) return;
 
       cacheInfoCache = Object.assign({}, cacheInfoCache, partial, { updatedAtMs: Date.now() });
       userProperties.setProperty('sidebarCacheInfo', JSON.stringify(cacheInfoCache));
