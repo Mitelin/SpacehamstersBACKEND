@@ -58,6 +58,58 @@ const Zasobovani = (() => {
     return s;
   };
 
+  const GAS_BUY_MULTIPLIER = 1.1;
+
+  const getCompressedGasVariant_ = (() => {
+    const memo = new Map();
+
+    const isGasLikeType_ = (type, itemName) => {
+      const normalizedItem = normalizeName_(itemName).toLowerCase();
+      const groupName = String(type && type.group || '').toLowerCase();
+      return (
+        normalizedItem.indexOf('fullerite-') === 0 ||
+        normalizedItem.indexOf('mykoserocin ') === 0 ||
+        normalizedItem.indexOf('cytoserocin ') === 0 ||
+        groupName.indexOf('gas') >= 0 ||
+        groupName.indexOf('cloud') >= 0
+      );
+    };
+
+    return (itemName) => {
+      const normalizedItem = normalizeName_(itemName);
+      if (!normalizedItem) return null;
+      if (memo.has(normalizedItem)) return memo.get(normalizedItem);
+
+      let result = null;
+      try {
+        const type = Universe.searchType(normalizedItem);
+        const compressedName = normalizedItem.indexOf('Compressed ') === 0
+          ? normalizedItem
+          : ('Compressed ' + normalizedItem);
+
+        if (compressedName !== normalizedItem && isGasLikeType_(type, normalizedItem)) {
+          const compressedType = Universe.searchType(compressedName);
+          const resolvedCompressedName = normalizeName_(compressedType && compressedType.type_name);
+          const compressedGroup = String(compressedType && compressedType.group || '').toLowerCase();
+          if (
+            resolvedCompressedName === compressedName &&
+            compressedGroup.indexOf('compressed') >= 0
+          ) {
+            result = {
+              itemName: compressedType.type_name,
+              multiplier: GAS_BUY_MULTIPLIER,
+            };
+          }
+        }
+      } catch (e) {
+        result = null;
+      }
+
+      memo.set(normalizedItem, result);
+      return result;
+    };
+  })();
+
   const baseDivisionFromHangarLabel_ = (label) => {
     const s = String(label || '').trim();
     if (!s) return '';
@@ -163,13 +215,23 @@ const Zasobovani = (() => {
   const writeNakupList_ = (ss, needsByName, stockByName, prodDivisions) => {
     const sh = getOrCreateSheet_(ss, NAKUP_SHEET_NAME);
 
-    const rows = [];
+    const rowsByItem = new Map();
     needsByName.forEach((need, item) => {
-      const stock = stockByName.get(item) || 0;
+      const gasVariant = getCompressedGasVariant_(item);
+      const outputItem = gasVariant ? gasVariant.itemName : item;
+      const multiplier = gasVariant ? gasVariant.multiplier : 1;
+      const stock = (stockByName.get(item) || 0) + (gasVariant ? (stockByName.get(outputItem) || 0) : 0);
       const toBuy = Math.max(0, need - stock);
       if (!(toBuy > 0)) return;
-      rows.push([item, Math.ceil(toBuy), Math.ceil(need), Math.floor(stock)]);
+
+      const prev = rowsByItem.get(outputItem) || [outputItem, 0, 0, 0];
+      prev[1] += Math.ceil(toBuy * multiplier);
+      prev[2] += Math.ceil(need);
+      prev[3] += Math.floor(stock);
+      rowsByItem.set(outputItem, prev);
     });
+
+    const rows = Array.from(rowsByItem.values());
 
     rows.sort((a, b) => {
       const q = Number(b[1]) - Number(a[1]);
