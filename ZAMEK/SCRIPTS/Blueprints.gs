@@ -16,6 +16,7 @@ const Blueprints = (()=>{
   const colLog = 18    // prvni slupec tabulky mezivyrobku
   const colLock = 11   // zloupec zamku produkce
   const rowLock = 8    // radka zamku
+  const clearToRow = 4000
 
   const _TRACE = PropertiesService.getScriptProperties().getProperty('DEBUG_TRACE') === '1';
   let preparedCopyingReservationsMemo = null;
@@ -249,9 +250,12 @@ const Blueprints = (()=>{
       hangars.push(hangar);
     };
 
-    pushHangar(manufacturingHangars, Corporation.getHangarByName('Manufactoring', manufacturingHangar));
-    pushHangar(manufacturingHangars, Corporation.getHangarByName('Capital', capitalHangar));
-    manufacturingHangars.forEach(hangar => blueprintAccessHangars.push(hangar));
+    const manufacturingHangarObj = Corporation.getHangarByName('Manufactoring', manufacturingHangar);
+    const capitalHangarObj = Corporation.getHangarByName('Capital', capitalHangar);
+
+    pushHangar(manufacturingHangars, manufacturingHangarObj);
+    if (capitalHangarObj) hangars.push(capitalHangarObj);
+    if (manufacturingHangarObj) blueprintAccessHangars.push(manufacturingHangarObj);
 
     const reactionHangarObj = Corporation.getHangarByName('Reaction', reactionHangar);
     if (reactionHangarObj) hangars.push(reactionHangarObj);
@@ -291,6 +295,10 @@ const Blueprints = (()=>{
         6: researchBufferHangars,
       },
       blueprintAccessHangars: blueprintAccessHangars,
+      blueprintExcludedHangars: []
+        .concat(manufacturingBufferHangar ? [manufacturingBufferHangar] : [])
+        .concat(reactionBufferHangar ? [reactionBufferHangar] : [])
+        .concat(researchBufferHangars),
     };
   };
 
@@ -318,6 +326,11 @@ const Blueprints = (()=>{
   const blueprintMatchesAnyHangar = function(item, hangars) {
     if (!item || !hangars) return false;
     return hangars.some(hangar => blueprintMatchesHangar(item, hangar));
+  };
+
+  const blueprintMatchesIncludedHangars = function(item, includeHangars, excludeHangars) {
+    if (!blueprintMatchesAnyHangar(item, includeHangars)) return false;
+    return !blueprintMatchesAnyHangar(item, excludeHangars || []);
   };
 
   const blueprintMatchesHangar = function(item, hangar) {
@@ -967,7 +980,7 @@ const Blueprints = (()=>{
         validateActiveSheet(sheet);
       }
       const _sheetName = sheet.getName();
-      const clearRows = maxJobs;
+      const clearRows = Math.max(maxJobs, clearToRow - firstDataRow + 1, sheet.getMaxRows() - firstDataRow + 1);
 
       // open sidebar
 //      Sidebar.open();
@@ -975,19 +988,19 @@ const Blueprints = (()=>{
 
       _time(_sheetName + ' recalc clear columns', () => {
         // clear running jobs column
-        range = sheet.getRange(firstDataRow, colJobs, maxJobs, 1);
+        range = sheet.getRange(firstDataRow, colJobs, clearRows, 1);
         range.setValue("");
 
         // required values must be reset before reading tables,
         // otherwise the next recalculation compounds the previous run.
-        range = sheet.getRange(firstDataRow, colJobs + 1, maxJobs, 1);
+        range = sheet.getRange(firstDataRow, colJobs + 1, clearRows, 1);
         range.setValue(0);
 
-        range = sheet.getRange(firstDataRow, colInput + 9, maxJobs, 6);
+        range = sheet.getRange(firstDataRow, colInput + 9, clearRows, 6);
         range.setValue(0);
 
         // clear job run costs and note
-        range = sheet.getRange(firstDataRow, colRunCost, maxJobs, 2);
+        range = sheet.getRange(firstDataRow, colRunCost, clearRows, 2);
         range.setValue("");
       });
 
@@ -1364,7 +1377,13 @@ const Blueprints = (()=>{
         );
         const blueprintSnapshot = snapshotWithData(
           allBlueprintsSnapshot,
-          (allBlueprintsSnapshot.data || []).filter(item => blueprintMatchesAnyHangar(item, hangarContext.hangars))
+          (allBlueprintsSnapshot.data || []).filter(item => (
+            blueprintMatchesIncludedHangars(
+              item,
+              hangarContext.blueprintAccessHangars,
+              hangarContext.blueprintExcludedHangars
+            )
+          ))
         );
         bpos = (allBlueprintsSnapshot.data || [])
           .filter(item => Number(item && item.runs) === -1)
@@ -1702,7 +1721,7 @@ const Blueprints = (()=>{
         validateActiveSheet(sheet);
       }
       const _sheetName = sheet.getName();
-      const clearRows = maxJobs;
+      const clearRows = Math.max(maxJobs, clearToRow - firstDataRow + 1, sheet.getMaxRows() - firstDataRow + 1);
 
       let lockVal;
       let setupValues;
@@ -1770,15 +1789,19 @@ const Blueprints = (()=>{
       // find the hangar identifications
       var hangars = [];
       var hangarsBPC = [];      // BPC runs only from research and manufactoring hangars - no interims
+      var blueprintExcludedHangars = [];
 
-      // combine manufacturing and capital hangar together
+      // combine manufacturing and capital hangar together for asset stock,
+      // but BPC stock must ignore the dedicated Capitals BPC container.
+      var hangarManufactoringObj = Corporation.getHangarByName('Manufactoring', hangarManufactoring);
+      var hangarCapitalObj = Corporation.getHangarByName('Capital', hangarCapital);
       let hangarsTemp = [];
-      hangarsTemp.push(Corporation.getHangarByName('Manufactoring', hangarManufactoring))
-      hangarsTemp.push(Corporation.getHangarByName('Capital', hangarCapital))
+      hangarsTemp.push(hangarManufactoringObj)
+      hangarsTemp.push(hangarCapitalObj)
       // drop null values
       var hangarM = hangarsTemp.filter(function (e) {return e; });
       hangars = hangars.concat(hangarM)
-      hangarsBPC = hangarsBPC.concat(hangarM)
+      if (hangarManufactoringObj) hangarsBPC.push(hangarManufactoringObj)
 
       var hangarR = Corporation.getHangarByName('Reaction', hangarReaction);
       if(hangarR) hangars.push(hangarR);
@@ -1791,9 +1814,15 @@ const Blueprints = (()=>{
       // add interim hangars with shared material buffer / production leftovovers
       if (useBufferHangar) {
         var hangarMB = Corporation.getHangarByName('Manufactoring', 'Produkty - Prebytky');
-        if(hangarMB) hangars.push(hangarMB);
+        if(hangarMB) {
+          hangars.push(hangarMB);
+          blueprintExcludedHangars.push(hangarMB);
+        }
         var hangarRB = Corporation.getHangarByName('Reaction', 'Produkty - Prebytky');
-        if(hangarRB) hangars.push(hangarRB);
+        if(hangarRB) {
+          hangars.push(hangarRB);
+          blueprintExcludedHangars.push(hangarRB);
+        }
 
  //       var hangarResB = Corporation.getHangarByName('Research', 'Invention - Prebytky');
         let hangarsTemp = [];
@@ -1803,6 +1832,7 @@ const Blueprints = (()=>{
         // drop null values
         var hangarResB = hangarsTemp.filter(function (e) {return e; });
         hangars = hangars.concat(hangarResB)
+        blueprintExcludedHangars = blueprintExcludedHangars.concat(hangarResB)
       }
       trace(hangars)
       _mark(_sheetName + ' build hangar list done');
@@ -1882,7 +1912,13 @@ const Blueprints = (()=>{
       if (typeof Corporation !== 'undefined' && Corporation.syncBlueprints && (!Corporation.isMemoFrozen || !Corporation.isMemoFrozen())) {
         _time(_sheetName + ' sync blueprints cache', () => Corporation.syncBlueprints());
       }
-      var bpcs = _time(_sheetName + ' corp blueprints', () => Corporation.getBlueprintsCached(hangarsBPC));
+      var bpcs = _time(_sheetName + ' corp blueprints', () => {
+        var allBlueprints = Corporation.getBlueprintsCached();
+        return snapshotWithData(
+          allBlueprints,
+          (allBlueprints.data || []).filter(item => blueprintMatchesIncludedHangars(item, hangarsBPC, blueprintExcludedHangars))
+        );
+      });
       Sidebar.add("- počet " + bpcs.data.length + " ks");
       Sidebar.add("- stáří " + (bpcs.age / 60).toFixed(2) + " m");
       Sidebar.add("- refresh " + (bpcs.cacheRefresh / 60).toFixed(2) + " m");
@@ -2311,7 +2347,10 @@ const Blueprints = (()=>{
         job.completedTime > bpcs.lastModified
       ))
       trace(deliveredResearchJobs);
-      finishedItems = getFinishedJobProducts  (plannedJobs, deliveredResearchJobs);
+      finishedItems = [];
+      hangarsBPC.forEach(hangar => {
+        finishedItems = finishedItems.concat(getFinishedJobProducts(plannedJobs, deliveredResearchJobs, hangar.locationID));
+      });
       if (finishedItems.length > 0) {
         trace(finishedItems);
         range = sheet.getRange(firstDataRow + bpcs.data.length + 1, colBPC, finishedItems.length, 2);

@@ -58,7 +58,7 @@ const Zasobovani = (() => {
     return s;
   };
 
-  const GAS_BUY_MULTIPLIER = 1.1;
+  const BUY_BUFFER_MULTIPLIER = 1.1;
 
   const getCompressedGasVariant_ = (() => {
     const memo = new Map();
@@ -97,7 +97,7 @@ const Zasobovani = (() => {
           ) {
             result = {
               itemName: compressedType.type_name,
-              multiplier: GAS_BUY_MULTIPLIER,
+              multiplier: BUY_BUFFER_MULTIPLIER,
             };
           }
         }
@@ -219,7 +219,7 @@ const Zasobovani = (() => {
     needsByName.forEach((need, item) => {
       const gasVariant = getCompressedGasVariant_(item);
       const outputItem = gasVariant ? gasVariant.itemName : item;
-      const multiplier = gasVariant ? gasVariant.multiplier : 1;
+      const multiplier = gasVariant ? gasVariant.multiplier : BUY_BUFFER_MULTIPLIER;
       const stock = (stockByName.get(item) || 0) + (gasVariant ? (stockByName.get(outputItem) || 0) : 0);
       const toBuy = Math.max(0, need - stock);
       if (!(toBuy > 0)) return;

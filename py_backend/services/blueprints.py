@@ -7,6 +7,10 @@ from .. import db
 from ..logger import log
 
 
+def is_datacore_name(name: str | None) -> bool:
+    return str(name or "").strip().lower().startswith("datacore - ")
+
+
 def resolve_material_multipliers(
     industry_structure_type: str | None,
     industry_rig: str | None,
@@ -260,6 +264,9 @@ def add_material(
     else:
         quantity = int(math.ceil((amount * material["quantity"] * float(reaction_rig_bonus)) / product["quantity"]))
 
+    if is_datacore_name(material.get("material")):
+        quantity *= 3
+
     quantity_basic_manufacture = quantity if (material["activityId"] == 1 and not is_advanced) else 0
     quantity_advanced_manufacture = quantity if (material["activityId"] == 1 and is_advanced) else 0
     quantity_basic_reaction = quantity if (material["activityId"] == 11 and not is_advanced) else 0
@@ -395,6 +402,7 @@ async def process_blueprint(
             )
 
             if e["activityId"] == activity_id:
+                base_quantity = e["quantity"] * (3 if is_datacore_name(e.get("material")) else 1)
                 if e.get("blueprintTypeId"):
                     add_module(
                         result,
@@ -404,11 +412,12 @@ async def process_blueprint(
                         int(e["activityId"]),
                         merge_modules=merge_modules,
                     )
-                materials_job.append({"type": e["material"], "quantity": quantity, "base_quantity": e["quantity"]})
+                materials_job.append({"type": e["material"], "quantity": quantity, "base_quantity": base_quantity})
             else:
+                base_quantity = e["quantity"] * (3 if is_datacore_name(e.get("material")) else 1)
                 if e.get("blueprintTypeId"):
                     add_module(result, quantity, 11, int(e["blueprintTypeId"]), 1, merge_modules=merge_modules)
-                materials_copy.append({"type": e["material"], "quantity": quantity, "base_quantity": e["quantity"]})
+                materials_copy.append({"type": e["material"], "quantity": quantity, "base_quantity": base_quantity})
 
     if add_copy_job:
         element_copy = {

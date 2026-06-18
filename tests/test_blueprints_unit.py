@@ -48,6 +48,17 @@ def test_add_material_rounding_manufacturing_me() -> None:
     assert qty == expected
 
 
+def test_add_material_triples_datacores() -> None:
+    result = {"materials": []}
+    product = {"quantity": 1}
+    material = {"materialTypeID": 1, "material": "Datacore - Mechanical Engineering", "quantity": 2, "activityId": 8}
+
+    qty = add_material(result, amount=1, level=1, product=product, material=material, bp_me=0, is_advanced=False)
+
+    assert qty == 6
+    assert result["materials"][0]["quantity"] == 6
+
+
 def test_add_job_preserves_lowest_level_for_direct_target() -> None:
     result = {"jobs": []}
     blueprint_product = {
