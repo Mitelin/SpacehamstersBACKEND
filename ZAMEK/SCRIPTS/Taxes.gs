@@ -92,6 +92,23 @@ function taxesStatusLabel_(item) {
   return labels[status] || String(status || '');
 }
 
+function sortTaxesSummary_(summary) {
+  var statusOrder = {
+    exempt: 0,
+    paid: 1,
+    unpaid: 2,
+    paid_late: 3,
+    partial: 4,
+    unmapped: 5
+  };
+  return summary.slice().sort(function(left, right) {
+    var leftOrder = Object.prototype.hasOwnProperty.call(statusOrder, left.status) ? statusOrder[left.status] : 99;
+    var rightOrder = Object.prototype.hasOwnProperty.call(statusOrder, right.status) ? statusOrder[right.status] : 99;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    return String(left.mainCharacterName || '').localeCompare(String(right.mainCharacterName || ''), 'cs');
+  });
+}
+
 function writeTaxesReport_(sheet, report) {
   var startRow = 5;
   var clearRows = Math.max(0, sheet.getMaxRows() - startRow + 1);
@@ -99,7 +116,7 @@ function writeTaxesReport_(sheet, report) {
     sheet.getRange(startRow, 1, clearRows, TAXES_HEADERS.length).clearContent().clearFormat();
   }
 
-  var summary = Array.isArray(report.summary) ? report.summary : [];
+  var summary = sortTaxesSummary_(Array.isArray(report.summary) ? report.summary : []);
   var rows = summary.map(function(item) {
     return [
       item.mainCharacterName || '',
