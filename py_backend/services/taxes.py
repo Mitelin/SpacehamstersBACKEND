@@ -12,6 +12,9 @@ from typing import Any
 from .. import db
 from ..settings import Settings
 
+TAX_LEDGER_START = (2026, 8)
+TAX_PAYMENT_AMOUNTS = {Decimal("250000000"), Decimal("500000000")}
+
 
 def _parse_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
@@ -36,6 +39,84 @@ def _merged_minutes(intervals: list[tuple[datetime, datetime]]) -> int:
         else:
             merged.append((start, end))
     return int(round(sum((end - start).total_seconds() for start, end in merged) / 60.0))
+
+
+def _iter_months(start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, int]]:
+    months: list[tuple[int, int]] = []
+    year, month = start
+    while (year, month) <= end:
+        months.append((year, month))
+        month = month + 1
+        if month == 13:
+            year, month = year + 1, 1
+    return months
+
+
+def allocate_tax_payments_fifo(
+    reports: list[dict[str, Any]],
+    identities: list[dict[str, Any]],
+    payments: list[dict[str, Any]],
+) -> None:
+    identity_by_character = {int(row["characterId"]): row for row in identities}
+    obligations: dict[str, list[dict[str, Any]]] = {}
+
+    for report in reports:
+        for row in report.get("summary", []):
+            auth_user_id = row.get("authUserId")
+            if auth_user_id is not None:
+                obligations.setdefault(f"auth:{auth_user_id}", []).append(row)
+            else:
+                for character_id in row.get("characterIds", []):
+                    obligations.setdefault(f"character:{character_id}", []).append(row)
+            row["paidAmount"] = 0.0
+            row["remainingAmount"] = float(row.get("requiredAmount") or 0)
+            row["lastPaymentAt"] = None
+            row["payments"] = 0
+
+    ordered_payments = sorted(
+        payments,
+        key=lambda payment: (_parse_datetime(payment.get("date")) or datetime.min, int(payment.get("id") or 0)),
+    )
+    for payment in ordered_payments:
+        payment_date = _parse_datetime(payment.get("date"))
+        if payment_date is None or payment_date < datetime(*TAX_LEDGER_START, 1):
+            continue
+        character_id = int(payment["characterId"])
+        identity = identity_by_character.get(character_id)
+        key = f"auth:{identity['authUserId']}" if identity else f"character:{character_id}"
+        remaining_payment = Decimal(str(payment.get("amount") or 0))
+        if remaining_payment not in TAX_PAYMENT_AMOUNTS:
+            continue
+
+        for row in obligations.get(key, []):
+            required = Decimal(str(row.get("requiredAmount") or 0))
+            already_paid = Decimal(str(row.get("paidAmount") or 0))
+            remaining_due = max(required - already_paid, Decimal(0))
+            if remaining_due <= 0:
+                continue
+            allocated = min(remaining_payment, remaining_due)
+            row["paidAmount"] = float(already_paid + allocated)
+            row["remainingAmount"] = float(remaining_due - allocated)
+            row["payments"] = int(row.get("payments") or 0) + 1
+            row["lastPaymentAt"] = payment_date.isoformat(sep=" ")
+            remaining_payment -= allocated
+            if remaining_payment <= 0:
+                break
+
+    for report in reports:
+        month_end = _parse_datetime(report.get("meta", {}).get("monthEnd"))
+        for row in report.get("summary", []):
+            if row.get("status") in {"exempt", "unmapped"}:
+                continue
+            required = Decimal(str(row.get("requiredAmount") or 0))
+            paid = Decimal(str(row.get("paidAmount") or 0))
+            if paid >= required:
+                paid_at = _parse_datetime(row.get("lastPaymentAt"))
+                row["status"] = "paid_late" if month_end and paid_at and paid_at >= month_end else "paid"
+            elif paid > 0:
+                row["status"] = "partial"
+            else:
+                row["status"] = "unpaid"
 
 
 def build_tax_report(
@@ -104,6 +185,8 @@ def build_tax_report(
                 person["intervals"].append((clipped_start, clipped_end))
 
     for payment in payments:
+        if Decimal(str(payment.get("amount") or 0)) not in TAX_PAYMENT_AMOUNTS:
+            continue
         character_id = int(payment["characterId"])
         identity = identity_by_character.get(character_id)
         if identity is None:
@@ -160,6 +243,7 @@ def build_tax_report(
                 "mainCharacterId": person["mainCharacterId"],
                 "mainCharacterName": person["mainCharacterName"],
                 "characters": sorted(person["characters"]),
+                "characterIds": sorted(person["characterIds"]),
                 "activityMinutes": activity_minutes,
                 "activityHours": round(activity_minutes / 60.0, 1),
                 "activitySource": "intervals" if has_intervals else "monthly_estimate",
@@ -184,6 +268,7 @@ def build_tax_report(
             "activityThresholdHours": float(activity_threshold_hours),
             "membershipThresholdDays": int(membership_threshold_days),
             "evaluatedAt": evaluation_at.isoformat(sep=" "),
+            "monthEnd": month_end.isoformat(sep=" "),
             "peopleCount": len(summary),
             "unmappedCount": sum(1 for row in summary if row["status"] == "unmapped"),
         },
@@ -280,18 +365,35 @@ class TaxService:
         m = int(month)
         if y < 2021 or y > 2100 or m < 1 or m > 12:
             raise RuntimeError("Invalid tax report period")
-        month_start = f"{y:04d}-{m:02d}-01"
+        requested_period = (y, m)
+        if requested_period < TAX_LEDGER_START:
+            return {
+                "summary": [],
+                "meta": {
+                    "year": y,
+                    "month": m,
+                    "wallet": int(wallet),
+                    "taxLedgerStart": "2026-08",
+                    "peopleCount": 0,
+                    "unmappedCount": 0,
+                },
+            }
+
+        periods = _iter_months(TAX_LEDGER_START, requested_period)
+        first_month = f"{TAX_LEDGER_START[0]:04d}-{TAX_LEDGER_START[1]:02d}-01"
+        requested_month = f"{y:04d}-{m:02d}-01"
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         members = await db.fetch_all(
             """
-            SELECT m.characterID AS characterId,
+            SELECT m.year, m.month, m.characterID AS characterId,
                    COALESCE(cn.name, CAST(m.characterID AS CHAR)) AS characterName,
-                     m.estimatedMinutes, m.startDate
+                   m.estimatedMinutes, m.startDate
             FROM corpActivityMonthly m
             LEFT JOIN corpNames cn ON cn.ID = m.characterID
-            WHERE m.year = %s AND m.month = %s
+            WHERE (m.year * 100 + m.month) BETWEEN %s AND %s
             """,
-            [y, m],
+            [TAX_LEDGER_START[0] * 100 + TAX_LEDGER_START[1], y * 100 + m],
         )
         identities = await db.fetch_all(
             """
@@ -307,26 +409,51 @@ class TaxService:
             FROM corpActivityIntervals
             WHERE intervalStart < DATE_ADD(%s, INTERVAL 1 MONTH) AND intervalEnd > %s
             """,
-            [month_start, month_start],
+            [requested_month, first_month],
         )
         payments = await db.fetch_all(
             """
-            SELECT firstPartyID AS characterId, amount, date
+            SELECT id, firstPartyID AS characterId, amount, date
             FROM corpWalletJournal
-            WHERE wallet = %s AND refType = 'player_donation' AND amount > 0
-              AND date >= %s AND date < DATE_ADD(%s, INTERVAL 1 MONTH)
+                        WHERE wallet = %s AND refType = 'player_donation' AND amount IN (%s, %s)
+              AND date >= %s AND date <= %s
+            ORDER BY date, id
             """,
-            [int(wallet), month_start, month_start],
+                        [int(wallet), 250_000_000, 500_000_000, first_month, now],
         )
-        report = build_tax_report(
-            members,
-            identities,
-            intervals,
-            payments,
-            year=y,
-            month=m,
-            required_amount=int(required_amount),
-            activity_threshold_hours=float(activity_threshold_hours),
-        )
+
+        reports: list[dict[str, Any]] = []
+        for report_year, report_month in periods:
+            report_start = datetime(report_year, report_month, 1)
+            report_end = (
+                datetime(report_year + 1, 1, 1)
+                if report_month == 12
+                else datetime(report_year, report_month + 1, 1)
+            )
+            report = build_tax_report(
+                [
+                    row
+                    for row in members
+                    if int(row.get("year") or 0) == report_year and int(row.get("month") or 0) == report_month
+                ],
+                identities,
+                [
+                    row
+                    for row in intervals
+                    if (_parse_datetime(row.get("intervalStart")) or datetime.max) < report_end
+                    and (_parse_datetime(row.get("intervalEnd")) or datetime.min) > report_start
+                ],
+                [],
+                year=report_year,
+                month=report_month,
+                required_amount=int(required_amount),
+                activity_threshold_hours=float(activity_threshold_hours),
+                as_of=now,
+            )
+            reports.append(report)
+
+        allocate_tax_payments_fifo(reports, identities, payments)
+        report = reports[-1]
         report["meta"]["wallet"] = int(wallet)
+        report["meta"]["taxLedgerStart"] = "2026-08"
         return report

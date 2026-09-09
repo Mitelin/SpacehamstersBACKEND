@@ -83,6 +83,7 @@ function taxesStatusLabel_(item) {
   }
   var labels = {
     paid: 'ZAPLACENO',
+    paid_late: 'ZAPLACENO POZDĚ',
     unpaid: 'NEZAPLACENO',
     partial: 'ČÁSTEČNĚ',
     exempt: 'VÝJIMKA – NÍZKÁ AKTIVITA',
@@ -124,6 +125,7 @@ function writeTaxesReport_(sheet, report) {
     var backgrounds = summary.map(function(item, index) {
       var colors = {
         paid: '#d9ead3',
+        paid_late: '#cfe2f3',
         unpaid: '#f4cccc',
         partial: '#fce5cd',
         exempt: '#d9eaf7',
