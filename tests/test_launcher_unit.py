@@ -7,6 +7,12 @@ import pytest
 import launcher
 
 
+def test_db_bootstrap_backfills_legacy_wallet_division() -> None:
+    sql = launcher.DBINIT_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "UPDATE corpWalletJournal SET wallet = 1 WHERE wallet IS NULL" in sql
+
+
 @pytest.mark.asyncio
 async def test_ensure_database_ready_bootstraps_when_activity_table_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _noop(*args, **kwargs):

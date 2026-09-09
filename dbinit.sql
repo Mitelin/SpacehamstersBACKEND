@@ -167,6 +167,7 @@ CREATE TABLE IF NOT EXISTS corpJobsReportMonthly (
 );
 
 ALTER TABLE corpWalletJournal ADD COLUMN IF NOT EXISTS wallet INT AFTER id;
+UPDATE corpWalletJournal SET wallet = 1 WHERE wallet IS NULL;
 CREATE INDEX IF NOT EXISTS idx_corpWalletJournal_wallet_date ON corpWalletJournal (wallet, date);
 CREATE INDEX IF NOT EXISTS idx_corpWalletJournal_date ON corpWalletJournal (date);
 
