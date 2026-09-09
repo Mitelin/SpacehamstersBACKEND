@@ -58,6 +58,8 @@ def test_tax_report_groups_alts_and_deduplicates_overlapping_activity() -> None:
             "activityMinutes": 600,
             "activityHours": 10.0,
             "activitySource": "intervals",
+            "corporationTenureDays": None,
+            "exemptionReasons": [],
             "requiredAmount": 250_000_000.0,
             "paidAmount": 250_000_000.0,
             "remainingAmount": 0.0,
@@ -90,3 +92,78 @@ def test_tax_report_exempts_person_below_ten_hours() -> None:
     assert row["requiredAmount"] == 0.0
     assert row["remainingAmount"] == 0.0
     assert row["status"] == "exempt"
+    assert row["exemptionReasons"] == ["low_activity"]
+
+
+def test_tax_report_exempts_person_without_character_over_62_days() -> None:
+    report = build_tax_report(
+        [
+            {
+                "characterId": 300,
+                "characterName": "New Main",
+                "estimatedMinutes": 900,
+                "startDate": datetime(2026, 7, 1),
+            }
+        ],
+        [
+            {
+                "authUserId": 53,
+                "mainCharacterId": 300,
+                "mainCharacterName": "New Main",
+                "characterId": 300,
+            }
+        ],
+        [],
+        [],
+        year=2026,
+        month=8,
+    )
+
+    row = report["summary"][0]
+    assert row["corporationTenureDays"] == 62
+    assert row["exemptionReasons"] == ["short_membership"]
+    assert row["requiredAmount"] == 0.0
+    assert row["status"] == "exempt"
+
+
+def test_tax_report_uses_longest_membership_across_alts() -> None:
+    report = build_tax_report(
+        [
+            {
+                "characterId": 400,
+                "characterName": "New Main",
+                "estimatedMinutes": 600,
+                "startDate": datetime(2026, 8, 1),
+            },
+            {
+                "characterId": 401,
+                "characterName": "Old Alt",
+                "estimatedMinutes": 600,
+                "startDate": datetime(2026, 6, 1),
+            },
+        ],
+        [
+            {
+                "authUserId": 54,
+                "mainCharacterId": 400,
+                "mainCharacterName": "New Main",
+                "characterId": 400,
+            },
+            {
+                "authUserId": 54,
+                "mainCharacterId": 400,
+                "mainCharacterName": "New Main",
+                "characterId": 401,
+            },
+        ],
+        [],
+        [],
+        year=2026,
+        month=8,
+    )
+
+    row = report["summary"][0]
+    assert row["corporationTenureDays"] == 92
+    assert row["exemptionReasons"] == []
+    assert row["requiredAmount"] == 250_000_000.0
+    assert row["status"] == "unpaid"

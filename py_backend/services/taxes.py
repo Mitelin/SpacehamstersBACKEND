@@ -4,7 +4,7 @@ import asyncio
 import json
 import subprocess
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -48,9 +48,12 @@ def build_tax_report(
     month: int,
     required_amount: int = 250_000_000,
     activity_threshold_hours: float = 10.0,
+    membership_threshold_days: int = 62,
+    as_of: datetime | None = None,
 ) -> dict[str, Any]:
     month_start = datetime(int(year), int(month), 1)
     month_end = datetime(int(year) + 1, 1, 1) if int(month) == 12 else datetime(int(year), int(month) + 1, 1)
+    evaluation_at = min(as_of or datetime.now(timezone.utc).replace(tzinfo=None), month_end)
     identity_by_character = {int(row["characterId"]): row for row in identities}
     people: dict[str, dict[str, Any]] = {}
 
@@ -68,6 +71,7 @@ def build_tax_report(
                 "fallbackMinutes": [],
                 "intervals": [],
                 "payments": [],
+                "membershipStartDates": [],
                 "mapped": identity is not None,
             }
         return people[key]
@@ -80,6 +84,9 @@ def build_tax_report(
             person["characterIds"].add(character_id)
             person["characters"].append(character_name)
         person["fallbackMinutes"].append(int(member.get("estimatedMinutes") or 0))
+        membership_start = _parse_datetime(member.get("startDate"))
+        if membership_start is not None:
+            person["membershipStartDates"].append(membership_start)
 
     for interval in intervals:
         character_id = int(interval["characterId"])
@@ -116,7 +123,18 @@ def build_tax_report(
             else max(person["fallbackMinutes"], default=0)
         )
         paid_amount = sum(Decimal(str(payment.get("amount") or 0)) for payment in person["payments"])
-        exempt = activity_minutes < threshold_minutes
+        membership_days = max(
+            (max(0, (evaluation_at - start).days) for start in person["membershipStartDates"]),
+            default=None,
+        )
+        activity_exempt = activity_minutes < threshold_minutes
+        membership_exempt = membership_days is not None and membership_days <= int(membership_threshold_days)
+        exemption_reasons = []
+        if activity_exempt:
+            exemption_reasons.append("low_activity")
+        if membership_exempt:
+            exemption_reasons.append("short_membership")
+        exempt = bool(exemption_reasons)
         amount_due = Decimal(0 if exempt else required_amount)
         remaining = max(amount_due - paid_amount, Decimal(0))
 
@@ -145,6 +163,8 @@ def build_tax_report(
                 "activityMinutes": activity_minutes,
                 "activityHours": round(activity_minutes / 60.0, 1),
                 "activitySource": "intervals" if has_intervals else "monthly_estimate",
+                "corporationTenureDays": membership_days,
+                "exemptionReasons": exemption_reasons,
                 "requiredAmount": float(amount_due),
                 "paidAmount": float(paid_amount),
                 "remainingAmount": float(remaining),
@@ -162,6 +182,8 @@ def build_tax_report(
             "month": int(month),
             "requiredAmount": int(required_amount),
             "activityThresholdHours": float(activity_threshold_hours),
+            "membershipThresholdDays": int(membership_threshold_days),
+            "evaluatedAt": evaluation_at.isoformat(sep=" "),
             "peopleCount": len(summary),
             "unmappedCount": sum(1 for row in summary if row["status"] == "unmapped"),
         },
@@ -264,7 +286,7 @@ class TaxService:
             """
             SELECT m.characterID AS characterId,
                    COALESCE(cn.name, CAST(m.characterID AS CHAR)) AS characterName,
-                   m.estimatedMinutes
+                     m.estimatedMinutes, m.startDate
             FROM corpActivityMonthly m
             LEFT JOIN corpNames cn ON cn.ID = m.characterID
             WHERE m.year = %s AND m.month = %s

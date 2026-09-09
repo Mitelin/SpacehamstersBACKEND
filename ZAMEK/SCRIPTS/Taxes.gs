@@ -72,7 +72,15 @@ function ensureTaxesLayout_(sheet) {
   sheet.setColumnWidth(10, 130);
 }
 
-function taxesStatusLabel_(status) {
+function taxesStatusLabel_(item) {
+  var status = item && item.status;
+  var reasons = item && Array.isArray(item.exemptionReasons) ? item.exemptionReasons : [];
+  if (status === 'exempt') {
+    var shortMembership = reasons.indexOf('short_membership') !== -1;
+    var lowActivity = reasons.indexOf('low_activity') !== -1;
+    if (shortMembership && lowActivity) return 'VÝJIMKA – NOVÝ ČLEN + NÍZKÁ AKTIVITA';
+    if (shortMembership) return 'VÝJIMKA – NOVÝ ČLEN';
+  }
   var labels = {
     paid: 'ZAPLACENO',
     unpaid: 'NEZAPLACENO',
@@ -99,7 +107,7 @@ function writeTaxesReport_(sheet, report) {
       Number(item.requiredAmount || 0),
       Number(item.paidAmount || 0),
       Number(item.remainingAmount || 0),
-      taxesStatusLabel_(item.status),
+      taxesStatusLabel_(item),
       item.lastPaymentAt ? new Date(item.lastPaymentAt) : '',
       Number(item.payments || 0),
       item.activitySource === 'intervals' ? 'Intervaly' : 'Měsíční odhad'
