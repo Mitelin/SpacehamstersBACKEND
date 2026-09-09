@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from .. import db
 from ..esi import ESIClient, parse_x_pages
 from ..logger import log
+from .retention import prune_wallet_history
 
 
 def _jsonable_value(value: Any) -> Any:
@@ -52,6 +53,7 @@ class WalletJournalService:
 
             if touched_months:
                 await self.refresh_monthly_snapshots(wallet, touched_months)
+            await prune_wallet_history(datetime.now(timezone.utc).replace(tzinfo=None))
             return cnt
 
     async def sync_names(self, access_token: str) -> int:

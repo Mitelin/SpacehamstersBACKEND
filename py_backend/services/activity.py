@@ -9,6 +9,7 @@ from typing import Any
 from .. import db
 from ..esi import ESIClient
 from ..logger import log
+from .retention import prune_activity_history
 
 
 def _jsonable_value(value: Any) -> Any:
@@ -462,6 +463,7 @@ class ActivityService:
             await self.sync_names(items, access_token)
             cnt = await self.store(items, current_snapshot)
             await self.update_monthly_activity(items, current_snapshot, snapshot_is_current=snapshot_is_current)
+            await prune_activity_history(current_snapshot)
             return cnt
 
     async def sync_names(self, items: list[dict[str, Any]], access_token: str) -> int:

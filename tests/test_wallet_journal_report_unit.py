@@ -93,14 +93,19 @@ async def test_wallet_journal_sync_refreshes_monthly_snapshots(monkeypatch: pyte
         seen["months"] = set(months)
         return 2
 
+    async def fake_prune(reference: datetime) -> int:
+        seen["pruned"] = True
+        return 0
+
     monkeypatch.setattr(service._esi, "get", fake_get)
     monkeypatch.setattr("py_backend.services.wallet_journal.parse_x_pages", lambda response: 1)
     monkeypatch.setattr(service, "store", fake_store)
     monkeypatch.setattr(service, "refresh_monthly_snapshots", fake_refresh)
+    monkeypatch.setattr("py_backend.services.wallet_journal.prune_wallet_history", fake_prune)
 
     count = await service.sync(corporation_id=98652228, wallet=1, access_token="token")
 
     await esi.close()
 
     assert count == 2
-    assert seen == {"stored_wallet": 1, "wallet": 1, "months": {(2026, 3), (2026, 4)}}
+    assert seen == {"stored_wallet": 1, "wallet": 1, "months": {(2026, 3), (2026, 4)}, "pruned": True}

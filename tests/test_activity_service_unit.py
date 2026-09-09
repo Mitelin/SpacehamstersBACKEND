@@ -407,10 +407,15 @@ async def test_activity_sync_stores_rows_and_names(monkeypatch: pytest.MonkeyPat
         captured["activity_snapshot_is_current"] = snapshot_is_current
         return 1
 
+    async def fake_prune(snapshot_at: datetime) -> int:
+        captured["prune_snapshot"] = snapshot_at
+        return 0
+
     monkeypatch.setattr(service._esi, "get", fake_get)
     monkeypatch.setattr(service, "sync_names", fake_sync_names)
     monkeypatch.setattr(service, "store", fake_store)
     monkeypatch.setattr(service, "update_monthly_activity", fake_update)
+    monkeypatch.setattr("py_backend.services.activity.prune_activity_history", fake_prune)
 
     count = await service.sync(corporation_id=98652228, access_token="ceo-token", snapshot_at=datetime(2026, 4, 24, 8, 45))
 
@@ -426,6 +431,7 @@ async def test_activity_sync_stores_rows_and_names(monkeypatch: pytest.MonkeyPat
     assert captured["activity_items"] == captured["stored_items"]
     assert captured["activity_snapshot"] == datetime(2026, 4, 24, 8, 45)
     assert captured["activity_snapshot_is_current"] is True
+    assert captured["prune_snapshot"] == datetime(2026, 4, 24, 8, 45)
 
 
 @pytest.mark.asyncio

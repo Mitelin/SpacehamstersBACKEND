@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS corpActivityIntervals (
     KEY idx_corpActivityIntervals_snapshot (sourceSnapshotAt)
 );
 
+CREATE INDEX IF NOT EXISTS idx_corpActivityIntervals_end ON corpActivityIntervals (intervalEnd);
+
 CREATE TABLE IF NOT EXISTS corpActivityState (
     characterID BIGINT NOT NULL PRIMARY KEY,
     lastLogonDate DATETIME,
@@ -166,6 +168,7 @@ CREATE TABLE IF NOT EXISTS corpJobsReportMonthly (
 
 ALTER TABLE corpWalletJournal ADD COLUMN IF NOT EXISTS wallet INT AFTER id;
 CREATE INDEX IF NOT EXISTS idx_corpWalletJournal_wallet_date ON corpWalletJournal (wallet, date);
+CREATE INDEX IF NOT EXISTS idx_corpWalletJournal_date ON corpWalletJournal (date);
 
 CREATE TABLE IF NOT EXISTS corpTaxIdentity (
     characterID BIGINT NOT NULL PRIMARY KEY,
