@@ -529,6 +529,18 @@ async def _db_table_exists(conn, db_name: str, table: str) -> bool:
         return (await cur.fetchone()) is not None
 
 
+async def _db_column_exists(conn, db_name: str, table: str, column: str) -> bool:
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT 1 FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND COLUMN_NAME=%s
+            """,
+            (db_name, table, column),
+        )
+        return (await cur.fetchone()) is not None
+
+
 async def _db_count(conn, sql: str, params: tuple[Any, ...] = ()) -> int:
     async with conn.cursor() as cur:
         await cur.execute(sql, params)
@@ -659,6 +671,7 @@ async def ensure_database_ready(cfg: dict[str, Any], env: dict[str, str]) -> Non
             "corpActivityMonthly",
             "corpActivityIntervals",
             "corpActivityState",
+            "corpTaxIdentity",
             "corpHangars",
             "corpJobs",
             "corpJobsReportMonthly",
@@ -672,6 +685,9 @@ async def ensure_database_ready(cfg: dict[str, Any], env: dict[str, str]) -> Non
         for t in required_tables:
             if not await _db_table_exists(conn, params["db"], t):
                 missing.append(t)
+
+        if not missing and not await _db_column_exists(conn, params["db"], "corpWalletJournal", "wallet"):
+            missing.append("corpWalletJournal.wallet")
 
         # also treat empty corpHangars as "not ready"
         if not missing:
