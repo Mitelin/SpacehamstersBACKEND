@@ -71,6 +71,32 @@ def test_wallet_journal_report_missing_year(app_client, monkeypatch: pytest.Monk
     assert resp.text == "year parameter missing"
 
 
+def test_taxes_report_happy_path(app_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = app_client.app
+    _set_auth(app, monkeypatch)
+    seen: dict[str, object] = {}
+
+    async def sync_identities(corporation_id: int) -> int:
+        seen["corporation_id"] = corporation_id
+        return 2
+
+    async def get_report(wallet: int, year: int, month: int) -> dict:
+        seen["report"] = (wallet, year, month)
+        return {"summary": [], "meta": {"peopleCount": 0}}
+
+    monkeypatch.setattr(app.state.tax_service, "sync_identities", sync_identities)
+    monkeypatch.setattr(app.state.tax_service, "get_report", get_report)
+
+    resp = app_client.get(
+        "/api/corporation/123/taxes/report/2026/8?wallet=1",
+        headers={"authorization": "Bearer x"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"summary": [], "meta": {"peopleCount": 0}}
+    assert seen == {"corporation_id": 123, "report": (1, 2026, 8)}
+
+
 def test_assets_sync_happy_path(app_client, monkeypatch: pytest.MonkeyPatch) -> None:
     app = app_client.app
     _set_auth(app, monkeypatch, user_token="user", ceo_token="ceo")

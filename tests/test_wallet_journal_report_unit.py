@@ -82,7 +82,8 @@ async def test_wallet_journal_sync_refreshes_monthly_snapshots(monkeypatch: pyte
     async def fake_get(path: str, token: str | None = None, params: dict | None = None):
         return FakeResponse()
 
-    async def fake_store(items: list[dict]) -> int:
+    async def fake_store(items: list[dict], wallet: int) -> int:
+        seen["stored_wallet"] = wallet
         return len(items)
 
     seen: dict[str, object] = {}
@@ -102,4 +103,4 @@ async def test_wallet_journal_sync_refreshes_monthly_snapshots(monkeypatch: pyte
     await esi.close()
 
     assert count == 2
-    assert seen == {"wallet": 1, "months": {(2026, 3), (2026, 4)}}
+    assert seen == {"stored_wallet": 1, "wallet": 1, "months": {(2026, 3), (2026, 4)}}

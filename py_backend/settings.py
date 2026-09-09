@@ -40,6 +40,11 @@ class Settings:
     log_level: int
     enable_scheduler: int
 
+    # Alliance Auth identity export (optional outside production)
+    alliance_auth_project: str | None
+    alliance_auth_python: str | None
+    alliance_auth_settings_module: str
+
 
 _settings: Settings | None = None
 
@@ -85,5 +90,9 @@ def get_settings() -> Settings:
         industry_wallet=_env_int("INDUSTRY_WALLET", 6) or 6,
         log_level=_env_int("LOG_LEVEL", 2) or 2,
         enable_scheduler=_env_int("ENABLE_SCHEDULER", 0) or 0,
+        alliance_auth_project=_env("ALLIANCE_AUTH_PROJECT"),
+        alliance_auth_python=_env("ALLIANCE_AUTH_PYTHON"),
+        alliance_auth_settings_module=_env("ALLIANCE_AUTH_SETTINGS_MODULE", "myauth.settings.local")
+        or "myauth.settings.local",
     )
     return _settings

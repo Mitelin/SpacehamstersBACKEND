@@ -19,6 +19,7 @@ from .services import blueprints as blueprints_service
 from .services.activity import ActivityService
 from .services.assets import AssetsService
 from .services.jobs import JobsService
+from .services.taxes import TaxService
 from .services.user_info import UserInfoService
 from .services.wallet_journal import WalletJournalService
 from .services.wallet_transactions import WalletTransactionsService
@@ -64,6 +65,7 @@ def create_app() -> Starlette:
     assets_service = AssetsService(esi)
     activity_service = ActivityService(esi)
     jobs_service = JobsService(esi)
+    tax_service = TaxService(settings)
     wallet_journal_service = WalletJournalService(esi)
     wallet_transactions_service = WalletTransactionsService(esi)
     version_info = _read_runtime_version()
@@ -76,6 +78,7 @@ def create_app() -> Starlette:
         app.state.assets_service = assets_service
         app.state.activity_service = activity_service
         app.state.jobs_service = jobs_service
+        app.state.tax_service = tax_service
         app.state.wallet_journal_service = wallet_journal_service
         app.state.wallet_transactions_service = wallet_transactions_service
         app.state.version_info = version_info
@@ -539,6 +542,29 @@ def create_app() -> Starlette:
         finally:
             log(1, f"GET /api/corporation/{corporation_id}/wallet/{wallet}/journal/report finished")
 
+    async def get_tax_report(request: Request) -> Response:
+        corporation_id = int(request.path_params["corporation_id"])
+        year = int(request.path_params["year"])
+        month = int(request.path_params["month"])
+        wallet = int(request.query_params.get("wallet", "1"))
+        log(2, f"GET /api/corporation/{corporation_id}/taxes/report/{year}/{month}")
+        try:
+            await request.app.state.user_info.validate_token(request.headers.get("authorization"))
+            identity_warning = None
+            try:
+                await request.app.state.tax_service.sync_identities(corporation_id)
+            except Exception as exc:
+                identity_warning = str(exc)
+                log(3, f"taxes identity sync warning: {exc}")
+            report = await request.app.state.tax_service.get_report(wallet, year, month)
+            if identity_warning:
+                report.setdefault("meta", {})["identitySyncWarning"] = identity_warning
+            return JSONResponse(report)
+        except Exception as exc:
+            return PlainTextResponse(f"Chyba: {exc}")
+        finally:
+            log(1, f"GET /api/corporation/{corporation_id}/taxes/report/{year}/{month} finished")
+
     async def get_wallet_journal_sync(request: Request) -> Response:
         corporation_id = int(request.path_params["corporation_id"])
         wallet = int(request.path_params["wallet"])
@@ -640,6 +666,11 @@ def create_app() -> Starlette:
         Route(
             "/api/corporation/{corporation_id:int}/activity/report/{year:int}/{month:int}",
             get_activity_report,
+            methods=["GET"],
+        ),
+        Route(
+            "/api/corporation/{corporation_id:int}/taxes/report/{year:int}/{month:int}",
+            get_tax_report,
             methods=["GET"],
         ),
         Route("/api/corporation/{corporation_id:int}/jobs/velocity", post_jobs_velocity, methods=["POST"]),

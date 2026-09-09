@@ -277,6 +277,16 @@ const Aubi = (()=>{
       );
 
       return parseAubiJsonResponse_(response, 'Aubi.getActivityReport year=' + year + ' month=' + month);
+    },
+
+    getTaxReport: function(year, month, wallet) {
+      wallet = Number(wallet || 1);
+      var response = UrlFetchApp.fetch(
+        aubiApi + '/corporation/' + corporationId.toString() + '/taxes/report/' + year.toString() + '/' + month.toString() + '?wallet=' + wallet.toString(),
+        authorized_options_get()
+      );
+
+      return parseAubiJsonResponse_(response, 'Aubi.getTaxReport year=' + year + ' month=' + month);
     }
 
   }

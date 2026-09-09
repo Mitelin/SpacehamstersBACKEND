@@ -47,7 +47,7 @@ class WalletJournalService:
                     raise RuntimeError(resp.reason_phrase)
                 items = resp.json()
                 touched_months.update(_extract_year_months(items))
-                cnt += await self.store(items)
+                cnt += await self.store(items, wallet)
                 page += 1
 
             if touched_months:
@@ -77,7 +77,7 @@ class WalletJournalService:
             cnt = await self.store_names(resp.json())
         return cnt
 
-    async def store(self, items: list[dict[str, Any]]) -> int:
+    async def store(self, items: list[dict[str, Any]], wallet: int) -> int:
         cnt = 0
         async with db.connection() as conn:
             async with conn.cursor() as cur:
@@ -85,13 +85,14 @@ class WalletJournalService:
                     await cur.execute(
                         """
                         REPLACE INTO corpWalletJournal (
-                            id, amount, balance, contextID, contextIDType, date,
+                            id, wallet, amount, balance, contextID, contextIDType, date,
                             description, firstPartyID, reason, refType,
                             secondPartyId, tax, taxReceiverID
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         """,
                         [
                             item.get("id"),
+                            int(wallet),
                             item.get("amount"),
                             item.get("balance"),
                             item.get("context_id"),
@@ -138,10 +139,11 @@ class WalletJournalService:
                         )
                         SELECT %s, %s, %s, refType, secondPartyId, SUM(amount)
                         FROM corpWalletJournal
-                        WHERE date >= %s AND date < DATE_ADD(%s, INTERVAL 1 MONTH)
+                                                WHERE wallet = %s
+                                                    AND date >= %s AND date < DATE_ADD(%s, INTERVAL 1 MONTH)
                         GROUP BY refType, secondPartyId
                         """,
-                        [int(wallet), int(year), int(month), month_start, month_start],
+                                                [int(wallet), int(year), int(month), int(wallet), month_start, month_start],
                     )
                     cnt += max(int(cur.rowcount), 0)
         return cnt
@@ -159,11 +161,12 @@ class WalletJournalService:
             f"""
             SELECT SUM(amount) amount, secondPartyId
             FROM corpWalletJournal
-            WHERE date >= %s and date < DATE_ADD(%s, INTERVAL 1 MONTH)
+            WHERE wallet = %s
+                AND date >= %s and date < DATE_ADD(%s, INTERVAL 1 MONTH)
                 AND refType IN ({in_placeholders})
             GROUP BY secondPartyId
             """,
-            [month_start, month_start, *type_list],
+            [int(wallet), month_start, month_start, *type_list],
         )
 
         if rows:

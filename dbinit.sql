@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS corpJobs (
 ;
 CREATE TABLE IF NOT EXISTS corpWalletJournal (
     id BIGINT NOT NULL PRIMARY KEY,
+    wallet INT,
     amount DECIMAL (15,2),
     balance DECIMAL (15,2),
     contextID BIGINT,
@@ -161,6 +162,22 @@ CREATE TABLE IF NOT EXISTS corpJobsReportMonthly (
     invention INT,
     reaction INT,
     PRIMARY KEY (year, month, installerID)
+);
+
+ALTER TABLE corpWalletJournal ADD COLUMN IF NOT EXISTS wallet INT AFTER id;
+CREATE INDEX IF NOT EXISTS idx_corpWalletJournal_wallet_date ON corpWalletJournal (wallet, date);
+
+CREATE TABLE IF NOT EXISTS corpTaxIdentity (
+    characterID BIGINT NOT NULL PRIMARY KEY,
+    characterName VARCHAR(255) NOT NULL,
+    authUserID BIGINT NOT NULL,
+    mainCharacterID BIGINT NOT NULL,
+    mainCharacterName VARCHAR(255) NOT NULL,
+    corporationID BIGINT,
+    isCurrentCorpMember TINYINT(1) NOT NULL DEFAULT 0,
+    syncedAt DATETIME NOT NULL,
+    KEY idx_corpTaxIdentity_user (authUserID),
+    KEY idx_corpTaxIdentity_corporation (corporationID, isCurrentCorpMember)
 );
 
 CREATE TABLE IF NOT EXISTS corpWalletJournalReportMonthly (

@@ -23,7 +23,11 @@
     "EVE_CLIENT_ID": "",
     "EVE_CLIENT_SECRET": "",
     "EVE_API_BASE": "https://esi.evetech.net/latest",
-    "EVE_TOKEN_API": "https://login.eveonline.com/v2/oauth/token"
+    "EVE_TOKEN_API": "https://login.eveonline.com/v2/oauth/token",
+
+    "ALLIANCE_AUTH_PROJECT": "/srv/django/alliance_auth",
+    "ALLIANCE_AUTH_PYTHON": "/srv/django/alliance_auth/.venv/bin/python",
+    "ALLIANCE_AUTH_SETTINGS_MODULE": "myauth.settings.local"
   },
 
   "database": {

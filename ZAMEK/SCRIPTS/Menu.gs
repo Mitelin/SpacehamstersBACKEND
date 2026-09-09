@@ -26,6 +26,7 @@ function onOpen() {
 //    .addItem('Načíst: P&L', 'downloadPL')
     .addItem('Načíst: Industry joby', 'syncJobs')
     .addItem('Načíst: Aktivita', 'syncActivity')
+    .addItem('Načíst: Daně', 'syncTaxes')
     .addItem('Načíst: Hangáry', 'syncHangars')
     .addItem('Projekty: Aktualizuj vše', 'runUpdateAllProjects')
     .addItem('Projekty: Aktualizuj vše DEBUG', 'runUpdateAllProjectsDebug')
