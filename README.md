@@ -312,6 +312,14 @@ Note: scheduler/ESI sync requires that the CEO OAuth token exists in DB (via `PO
 - `POST /api/blueprints/calculate` — compute jobs + materials for requested output types
 - `POST /api/blueprints/{type_id}/calculate` — compute for a single product type
 
+Jobs expose two levels: `level` retains the lowest occurrence (including `1` for
+direct project targets), while `sortLevel` retains the highest occurrence across
+merged requirements. Project sheets sort jobs by descending `sortLevel`, so a
+shared reaction keeps its highest position without changing quantity calculations.
+Deploy both the backend and [Blueprints.gs](ZAMEK/SCRIPTS/Blueprints.gs), then
+regenerate the project plan to update existing row order. The sheet falls back to
+`level` for older API responses without `sortLevel`.
+
 ## History migration (from old backend)
 
 New backend now refreshes `corpWalletJournalReportMonthly` and `corpJobsReportMonthly` automatically for months touched by wallet journal/jobs sync, so freshly-synced months keep their monthly history snapshots inside the new backend DB.

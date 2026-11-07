@@ -12,6 +12,19 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def test_project_jobs_sort_by_highest_merged_level_without_changing_target_level() -> None:
+    text = _read_text(BLUEPRINTS_GS)
+    assert re.search(
+        r"data\.jobs\.sort\(function \(a, b\) \{\s*"
+        r"const aLevel = a\.sortLevel == null \? a\.level : a\.sortLevel;\s*"
+        r"const bLevel = b\.sortLevel == null \? b\.level : b\.sortLevel;\s*"
+        r"return bLevel - aLevel;",
+        text,
+    )
+    assert "job.product, job.blueprint, job.level, job.type" in text
+    assert "if (plannedJobs[rowIndex][2] == 1)" in text
+
+
 def test_running_jobs_recalc_keeps_product_fallback_contract() -> None:
     text = _read_text(BLUEPRINTS_GS)
 

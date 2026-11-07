@@ -200,6 +200,7 @@ def add_job(
 
     if existing:
         existing["runs"] += runs
+        existing["sortLevel"] = max(existing["sortLevel"], level)
         if existing["level"] > level:
             existing["level"] = level
         if materials:
@@ -210,6 +211,7 @@ def add_job(
     result["jobs"].append(
         {
             "level": level,
+            "sortLevel": level,
             "type": job_type,
             "blueprintTypeId": blueprint_product["blueprintTypeId"],
             "blueprint": blueprint_product["blueprint"],

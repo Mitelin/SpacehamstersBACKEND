@@ -889,9 +889,11 @@ const Blueprints = (()=>{
       var data = parseJsonResponseSafe_(response, 'Blueprint calculate types=' + req.types.length);
     //  console.log(data);
 
-      // zapis runy jobu podle levelu sestupne
+      // Highest merged position; keep level unchanged for final-target quantities.
       data.jobs.sort(function (a, b) {
-        return b.level - a.level;
+        const aLevel = a.sortLevel == null ? a.level : a.sortLevel;
+        const bLevel = b.sortLevel == null ? b.level : b.sortLevel;
+        return bLevel - aLevel;
       });
     //  console.log(data.jobs);
 
